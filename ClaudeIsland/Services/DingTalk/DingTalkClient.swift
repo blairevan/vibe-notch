@@ -13,23 +13,6 @@ struct DingTalkMessage: Equatable, Sendable {
     )
 }
 
-/// Credentials required by a DingTalk custom group robot.
-struct DingTalkCredentials: Codable, Equatable, Sendable {
-    let token: String
-    let signingSecret: String
-
-    /// Empty credentials used when no Keychain item exists.
-    static let empty = DingTalkCredentials(token: "", signingSecret: "")
-
-    /// Returns credentials with surrounding whitespace removed.
-    var trimmed: DingTalkCredentials {
-        DingTalkCredentials(
-            token: token.trimmingCharacters(in: .whitespacesAndNewlines),
-            signingSecret: signingSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-    }
-}
-
 /// Sanitized failures produced while sending a DingTalk robot message.
 enum DingTalkClientError: Error, Equatable, LocalizedError {
     case missingToken
