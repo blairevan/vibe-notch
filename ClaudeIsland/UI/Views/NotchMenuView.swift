@@ -49,6 +49,7 @@ struct NotchMenuView: View {
 
                 // Notification settings
                 PopupToggleRow()
+                DingTalkSettingsRow()
 
                 Divider()
                     .background(Color.white.opacity(0.08))
