@@ -39,6 +39,7 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
+        static let showPopupOnPermissionRequest = "showPopupOnPermissionRequest"
     }
 
     // MARK: - Notification Sound
@@ -54,6 +55,18 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Popup on Permission Request
+
+    /// Whether to show a popup alert when a permission request is received
+    static var showPopupOnPermissionRequest: Bool {
+        get {
+            defaults.bool(forKey: Keys.showPopupOnPermissionRequest)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.showPopupOnPermissionRequest)
         }
     }
 

@@ -426,10 +426,25 @@ struct NotchView: View {
         let currentIds = Set(sessions.map { $0.stableId })
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
-        if !newPendingIds.isEmpty &&
-           viewModel.status == .closed &&
-           !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
-            viewModel.notchOpen(reason: .notification)
+        if !newPendingIds.isEmpty {
+            // Show popup for new permission requests
+            let newPendingSessions = sessions.filter { newPendingIds.contains($0.stableId) }
+            for session in newPendingSessions {
+                if case .waitingForApproval(let context) = session.phase {
+                    PopupManager.shared.showPermissionPopup(
+                        sessionId: session.sessionId,
+                        toolName: context.toolName,
+                        toolInput: context.toolInput,
+                        toolUseId: context.toolUseId
+                    )
+                }
+            }
+
+            // Open notch if terminal is not visible
+            if viewModel.status == .closed &&
+               !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
+                viewModel.notchOpen(reason: .notification)
+            }
         }
 
         previousPendingIds = currentIds

@@ -47,6 +47,13 @@ struct NotchMenuView: View {
                     .background(Color.white.opacity(0.08))
                     .padding(.vertical, 4)
 
+                // Notification settings
+                PopupToggleRow()
+
+                Divider()
+                    .background(Color.white.opacity(0.08))
+                    .padding(.vertical, 4)
+
                 // System settings
                 MenuToggleRow(
                     icon: "power",
@@ -128,6 +135,23 @@ struct NotchMenuView: View {
         hooksInstalled = HookInstaller.isInstalled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         screenSelector.refreshScreens()
+    }
+}
+
+// MARK: - Popup Toggle Row
+
+struct PopupToggleRow: View {
+    @State private var showPopup: Bool = AppSettings.showPopupOnPermissionRequest
+
+    var body: some View {
+        MenuToggleRow(
+            icon: "bell.badge",
+            label: "Permission Popup",
+            isOn: showPopup
+        ) {
+            showPopup.toggle()
+            AppSettings.showPopupOnPermissionRequest = showPopup
+        }
     }
 }
 
