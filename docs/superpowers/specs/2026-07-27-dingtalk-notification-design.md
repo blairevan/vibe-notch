@@ -41,9 +41,9 @@ The request body uses DingTalk Markdown messages. A send succeeds only when both
 
 ### `DingTalkCredentialStore`
 
-The robot token and optional signing secret are sensitive values and are stored in macOS Keychain. The enabled flag remains in `UserDefaults`. Credentials, complete request URLs, and message bodies must not appear in logs.
+The robot token and optional signing secret are sensitive values and are stored as one JSON file at `~/Library/Application Support/Vibe Notch/dingtalk.json`. The containing directory uses POSIX mode `0700`, and the file uses mode `0600`. The enabled flag remains in `UserDefaults`. Credentials, complete request URLs, and message bodies must not appear in logs.
 
-The credential store is exposed through a small protocol so menu state and coordinator behavior can be tested without accessing the real Keychain.
+The credential store is exposed through a small protocol so menu state and coordinator behavior can be tested without accessing the real filesystem.
 
 ## Menu Configuration
 
@@ -90,7 +90,7 @@ Only the final component of the working directory is included. Full paths, comma
 - Distinguish invalid configuration, transport failures, HTTP failures, invalid response data, and DingTalk business failures.
 - Show sanitized errors for manual test sends.
 - Log sanitized runtime failures without interrupting Vibe Notch UI or permission handling.
-- Preserve existing Keychain values if a save operation fails.
+- Atomically replace the credential file so a failed save preserves the previous complete value.
 
 ## Files
 
@@ -120,6 +120,8 @@ Add an XCTest target without adding third-party dependencies. Tests cover:
 - initial snapshot suppression;
 - first target-state transition delivery;
 - duplicate phase and `toolUseId` suppression; and
-- identical behavior for the shared Claude and Codex session format.
+- identical behavior for the shared Claude and Codex session format;
+- local credential round trips and malformed-file handling; and
+- directory mode `0700` and credential-file mode `0600`.
 
 Run the relevant tests and a Debug build after the final edit. Existing notification behavior must remain unchanged when DingTalk is disabled or unconfigured.

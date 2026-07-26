@@ -135,7 +135,7 @@ struct DingTalkSettingsRow: View {
             )
     }
 
-    /// Loads masked credential field values from Keychain.
+    /// Loads masked credential field values from the local credential file.
     private func loadCredentials() {
         do {
             let credentials = try credentialStore.load()
@@ -197,7 +197,7 @@ struct DingTalkSettingsRow: View {
         }
     }
 
-    /// Clears Keychain credentials and disables notifications.
+    /// Clears the local credential file and disables notifications.
     private func clearCredentials() {
         do {
             try credentialStore.clear()

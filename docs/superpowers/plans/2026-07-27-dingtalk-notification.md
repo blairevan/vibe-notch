@@ -4,16 +4,16 @@
 
 **Goal:** Add optional DingTalk group robot notifications for Vibe Notch task completion and permission requests.
 
-**Architecture:** A main-actor coordinator observes the existing unified `SessionStore` publisher, converts first-time target state transitions into privacy-minimized messages, and sends them through an injectable DingTalk client. Robot credentials are kept as one Codable Keychain value, while the enabled flag remains in `UserDefaults`.
+**Architecture:** A main-actor coordinator observes the existing unified `SessionStore` publisher, converts first-time target state transitions into privacy-minimized messages, and sends them through an injectable DingTalk client. Robot credentials are kept as one Codable owner-only local file, while the enabled flag remains in `UserDefaults`.
 
-**Tech Stack:** Swift 5, SwiftUI, Combine, Foundation `URLSession`, CryptoKit, Security, XCTest, macOS 15.6+
+**Tech Stack:** Swift 5, SwiftUI, Combine, Foundation `URLSession`, CryptoKit, XCTest, macOS 15.6+
 
 ## Global Constraints
 
 - Do not add third-party dependencies.
 - Do not distinguish Claude from Codex or alter their hook payloads.
 - Accept a DingTalk robot `access_token`, not a complete Webhook URL.
-- Store token and optional signing secret in macOS Keychain and never log them.
+- Store token and optional signing secret at `~/Library/Application Support/Vibe Notch/dingtalk.json` with directory mode `0700` and file mode `0600`; never log them.
 - Do not send conversation text, full paths, commands, file content, or tool input.
 - Keep all new functions and types documented and avoid type bypasses.
 
@@ -163,7 +163,7 @@ git add ClaudeIsland/Services/DingTalk/DingTalkClient.swift ClaudeIslandTests/Di
 git commit -m "feat: add DingTalk robot client"
 ```
 
-### Task 2: Keychain Credential Store
+### Task 2: Local File Credential Store
 
 **Files:**
 - Create: `ClaudeIsland/Services/DingTalk/DingTalkCredentialStore.swift`
@@ -193,7 +193,7 @@ func testEmptyStoreReturnsEmptyCredentials() throws {
 
 Run the same `xcodebuild test` command with `-only-testing:ClaudeIslandTests/DingTalkCredentialStoreTests`. Expected: missing store protocol/type errors.
 
-- [ ] **Step 3: Implement one-item Keychain persistence**
+- [ ] **Step 3: Implement one-file local persistence**
 
 Define:
 
@@ -206,12 +206,11 @@ protocol DingTalkCredentialStoring {
 
 final class DingTalkCredentialStore: DingTalkCredentialStoring {
     static let shared = DingTalkCredentialStore()
-    private let service = "com.celestial.ClaudeIsland.dingtalk"
-    private let account = "robot-credentials"
+    private let fileAccess: DingTalkCredentialFileAccessing
 }
 ```
 
-Encode both fields into one JSON blob. Use `SecItemCopyMatching`, `SecItemAdd`, `SecItemUpdate`, and `SecItemDelete`. Treat `errSecItemNotFound` as empty on load/clear. Because updates replace one item, a failed write leaves the previous item intact.
+Encode both fields into one JSON blob. Store it at `~/Library/Application Support/Vibe Notch/dingtalk.json`. Create the containing directory with mode `0700`, create synchronized temporary files with mode `0600`, and atomically replace the destination. Treat a missing file as empty on load/clear. Because updates replace one complete file, a failed write leaves the previous value intact.
 
 - [ ] **Step 4: Run credential and client tests**
 
@@ -221,7 +220,7 @@ Expected: both test classes pass.
 
 ```bash
 git add ClaudeIsland/Services/DingTalk ClaudeIslandTests/DingTalkCredentialStoreTests.swift
-git commit -m "feat: store DingTalk credentials in Keychain"
+git commit -m "feat: store DingTalk credentials in local file"
 ```
 
 ### Task 3: Session Notification Coordinator
