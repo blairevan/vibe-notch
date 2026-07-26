@@ -13,6 +13,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let updater: SPUUpdater
     private let userDriver: NotchUserDriver
 
+    /// Whether the app process is acting only as an XCTest bundle host.
+    private static var isRunningUnitTests: Bool {
+        let environment = Foundation.ProcessInfo.processInfo.environment
+        return environment["VIBE_NOTCH_UNIT_TESTS"] == "1" ||
+            environment["XCTestConfigurationFilePath"] != nil ||
+            environment["XCTestSessionIdentifier"] != nil ||
+            NSClassFromString("XCTestCase") != nil
+    }
+
     var windowController: NotchWindowController? {
         windowManager?.windowController
     }
@@ -36,6 +45,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !Self.isRunningUnitTests else { return }
+
         if !ensureSingleInstance() {
             NSApplication.shared.terminate(nil)
             return
@@ -92,6 +103,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !Self.isRunningUnitTests else { return }
+
         Mixpanel.mainInstance().flush()
         updateCheckTimer?.invalidate()
         screenObserver = nil
