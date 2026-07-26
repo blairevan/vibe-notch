@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
+    private let dingTalkCoordinator = DingTalkNotificationCoordinator()
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
@@ -79,6 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().flush()
 
         HookInstaller.installIfNeeded()
+        dingTalkCoordinator.start()
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()
@@ -106,6 +108,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !Self.isRunningUnitTests else { return }
 
         Mixpanel.mainInstance().flush()
+        dingTalkCoordinator.stop()
         updateCheckTimer?.invalidate()
         screenObserver = nil
     }
