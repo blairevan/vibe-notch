@@ -40,6 +40,7 @@ enum AppSettings {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
         static let showPopupOnPermissionRequest = "showPopupOnPermissionRequest"
+        static let dingTalkEnabled = "dingTalkEnabled"
     }
 
     // MARK: - Notification Sound
@@ -67,6 +68,18 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue, forKey: Keys.showPopupOnPermissionRequest)
+        }
+    }
+
+    // MARK: - DingTalk Notifications
+
+    /// Whether session events may be sent to the configured DingTalk robot.
+    static var dingTalkEnabled: Bool {
+        get {
+            defaults.bool(forKey: Keys.dingTalkEnabled)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.dingTalkEnabled)
         }
     }
 
