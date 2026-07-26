@@ -75,7 +75,9 @@ final class DingTalkNotificationCoordinator {
             let currentPhase = PhaseMarker(session.phase)
             let previousPhase = previousPhases[session.sessionId]
 
-            if currentPhase == .waitingForInput && previousPhase != .waitingForInput {
+            if let previousPhase,
+               currentPhase == .waitingForInput,
+               previousPhase != .waitingForInput {
                 messages.append(taskCompletedMessage(for: session))
             }
 

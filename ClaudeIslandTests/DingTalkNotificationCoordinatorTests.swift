@@ -28,6 +28,19 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(recorder.messages.first?.title, "Vibe Notch - Task Completed")
     }
 
+    /// Verifies a newly discovered waiting session is not mistaken for a completed task.
+    func testNewWaitingSessionDoesNotNotifyUntilKnownTransition() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        await coordinator.processSnapshot([])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+    }
+
     /// Verifies each permission tool identifier notifies only once.
     func testPermissionToolUseIdNotifiesOnce() async {
         let recorder = MessageRecorder()
