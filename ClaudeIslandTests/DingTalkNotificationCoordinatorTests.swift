@@ -169,7 +169,7 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         let text = recorder.messages.first?.text ?? ""
         XCTAssertTrue(text.contains("vibe-notch"))
         XCTAssertTrue(text.contains("Bash"))
-        XCTAssertTrue(text.contains("等待确认执行"))
+        XCTAssertTrue(text.contains("等待权限审批"))
         XCTAssertFalse(text.contains("/Users/private/vibe-notch"))
         XCTAssertFalse(text.contains("private command"))
     }
@@ -269,6 +269,7 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
+
 
 
 

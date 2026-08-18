@@ -154,7 +154,7 @@ final class DingTalkNotificationCoordinator {
             **项目与会话**
             - **项目**：`\(projectName)`
             - **主题**：\(subject)
-            - **状态**：等待输入 (Waiting for input)
+            - **状态**：✅ 执行完成 (等待输入)
 
             **本轮任务**
             > \(prompt)
@@ -185,7 +185,7 @@ final class DingTalkNotificationCoordinator {
             **待审批操作**
             - **项目**：`\(projectName)`
             - **工具**：`\(toolName)`
-            - **状态**：等待确认执行 (Waiting for approval)
+            - **状态**：⏳ 等待权限审批
 
             **环境与时间**
             - **终端**：\(terminalInfo)
@@ -348,6 +348,7 @@ private enum PhaseMarker: Equatable {
         }
     }
 }
+
 
 
 
