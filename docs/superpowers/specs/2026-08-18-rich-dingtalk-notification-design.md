@@ -43,7 +43,7 @@ Enhance the content and layout of DingTalk group robot notification messages in 
 ## Data Extraction Rules
 
 1. **Project Name**: Safe extraction from `session.projectName`.
-2. **Subject/Summary**: Prefers `session.conversationInfo.summary`, falls back to `session.conversationInfo.firstUserMessage`, and defaults to `"未命名会话"`.
+2. **Subject/Summary**: Prefers thread title from `~/.codex/state_5.sqlite`, falls back to `session.conversationInfo.summary`, `session.conversationInfo.firstUserMessage`, and defaults to `"未命名会话"`.
 3. **Latest Result**: Trims whitespace and newlines. If the text exceeds 400 characters, preserves the first 200 characters and the last 200 characters joined by `\n...\n` (or ` ... `), otherwise shows the full message. Renders inside Markdown blockquotes (`> `) for clean formatting.
 4. **Execution Duration**: Formatted as human-readable minutes and seconds.
 5. **Terminal / Process**: Formatted as `session.tty` (and `session.pid` if present).
