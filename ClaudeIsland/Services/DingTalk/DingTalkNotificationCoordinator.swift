@@ -136,31 +136,60 @@ final class DingTalkNotificationCoordinator {
         }
     }
 
-    /// Creates a task-completed message containing only safe session metadata.
+    /// Creates a task-completed message containing rich and safe session metadata.
     private func taskCompletedMessage(for session: SessionState) -> DingTalkMessage {
-        DingTalkMessage(
+        let projectName = safeValue(session.projectName, fallback: "Unknown")
+        let subject = extractSubject(from: session)
+        let prompt = extractLastUserPrompt(from: session)
+        let result = extractResult(from: session)
+        let duration = formattedDuration(for: session)
+        let terminalInfo = extractTerminalInfo(from: session)
+        let timeString = formattedTime()
+
+        return DingTalkMessage(
             title: "Vibe Notch - Task Completed",
             text: """
-            ### Vibe Notch - Task Completed
+            ### 🚀 Vibe Notch - 任务已完成
 
-            - Project: \(safeValue(session.projectName, fallback: "Unknown"))
-            - Status: Task completed, waiting for input
-            - Time: \(formattedTime())
+            **项目与会话**
+            - **项目**：`\(projectName)`
+            - **主题**：\(subject)
+            - **状态**：等待输入 (Waiting for input)
+
+            **本轮任务**
+            > \(prompt)
+
+            **最新结果**
+            > \(result)
+
+            **执行详情**
+            - **耗时**：\(duration)
+            - **终端**：\(terminalInfo)
+            - **时间**：\(timeString)
             """
         )
     }
 
     /// Creates a permission message without including tool input or full paths.
     private func permissionMessage(for session: SessionState) -> DingTalkMessage {
-        DingTalkMessage(
+        let projectName = safeValue(session.projectName, fallback: "Unknown")
+        let toolName = safeValue(session.pendingToolName ?? "Unknown", fallback: "Unknown")
+        let terminalInfo = extractTerminalInfo(from: session)
+        let timeString = formattedTime()
+
+        return DingTalkMessage(
             title: "Vibe Notch - Permission Required",
             text: """
-            ### Vibe Notch - Permission Required
+            ### ⚠️ Vibe Notch - 需要权限审批
 
-            - Project: \(safeValue(session.projectName, fallback: "Unknown"))
-            - Tool: \(safeValue(session.pendingToolName ?? "Unknown", fallback: "Unknown"))
-            - Status: Waiting for approval
-            - Time: \(formattedTime())
+            **待审批操作**
+            - **项目**：`\(projectName)`
+            - **工具**：`\(toolName)`
+            - **状态**：等待确认执行 (Waiting for approval)
+
+            **环境与时间**
+            - **终端**：\(terminalInfo)
+            - **时间**：\(timeString)
             """
         )
     }
@@ -170,8 +199,115 @@ final class DingTalkNotificationCoordinator {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: now())
+    }
+
+    /// Extracts the session subject/summary with fallbacks, checking SQLite thread title first.
+    private func extractSubject(from session: SessionState) -> String {
+        if let dbTitle = fetchCodexThreadTitle(sessionId: session.sessionId), !dbTitle.isEmpty {
+            return safeValue(dbTitle, fallback: "未命名会话")
+        }
+        if let summary = session.conversationInfo.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return safeValue(summary, fallback: "未命名会话")
+        }
+        if let firstUser = session.conversationInfo.firstUserMessage, !firstUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return safeValue(firstUser, fallback: "未命名会话")
+        }
+        return "未命名会话"
+    }
+
+    /// Fetches custom thread title from Codex SQLite database (~/.codex/state_5.sqlite)
+    private func fetchCodexThreadTitle(sessionId: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dbPath = home + "/.codex/state_5.sqlite"
+        guard FileManager.default.fileExists(atPath: dbPath) else { return nil }
+
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [dbPath, "SELECT title FROM threads WHERE id = '\(sessionId)' LIMIT 1;"]
+        process.standardOutput = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !output.isEmpty {
+                return output
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    /// Extracts the latest user prompt in the current turn.
+    private func extractLastUserPrompt(from session: SessionState) -> String {
+        let prompt = session.conversationInfo.lastUserMessage ?? session.conversationInfo.firstUserMessage ?? "未提供任务描述"
+        let cleanText = prompt.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\r\n", with: "\n")
+        if cleanText.count <= 300 {
+            return formatBlockquote(cleanText)
+        } else {
+            let head = String(cleanText.prefix(150))
+            let tail = String(cleanText.suffix(150))
+            return formatBlockquote("\(head)\n...\n\(tail)")
+        }
+    }
+
+    /// Extracts and formats the latest assistant response, keeping head 200 + tail 200 chars when > 400.
+    private func extractResult(from session: SessionState) -> String {
+        guard let lastMsg = session.conversationInfo.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !lastMsg.isEmpty else {
+            return "已完成当前执行，等待进一步输入。"
+        }
+        let cleanText = lastMsg.replacingOccurrences(of: "\r\n", with: "\n")
+        if cleanText.count <= 400 {
+            return formatBlockquote(cleanText)
+        } else {
+            let head = String(cleanText.prefix(200))
+            let tail = String(cleanText.suffix(200))
+            return formatBlockquote("\(head)\n...\n\(tail)")
+        }
+    }
+
+    /// Wraps multi-line content for blockquote display in Markdown.
+    private func formatBlockquote(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .joined(separator: "\n> ")
+    }
+
+    /// Formats session active duration based on turnStartTime or conversation timestamp.
+    private func formattedDuration(for session: SessionState) -> String {
+        let referenceStart = session.turnStartTime ?? session.conversationInfo.lastUserMessageDate ?? session.createdAt
+        let interval = max(0, now().timeIntervalSince(referenceStart))
+        let totalSeconds = Int(interval)
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        if minutes > 0 {
+            return "\(minutes)分\(seconds)秒"
+        } else {
+            return "\(seconds)秒"
+        }
+    }
+
+    /// Extracts terminal identifier and PID with friendly GUI name.
+    private func extractTerminalInfo(from session: SessionState) -> String {
+        let tty = session.tty
+        if let tty = tty, !tty.isEmpty {
+            if let pid = session.pid {
+                return "\(tty) (PID: \(pid))"
+            }
+            return tty
+        }
+
+        // GUI process / Desktop app fallback
+        if let pid = session.pid {
+            return "Codex Desktop (PID: \(pid))"
+        } else {
+            return "Codex Desktop"
+        }
     }
 
     /// Normalizes an external display value and limits its size.
@@ -212,3 +348,6 @@ private enum PhaseMarker: Equatable {
         }
     }
 }
+
+
+

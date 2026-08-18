@@ -40,6 +40,7 @@ struct ConversationInfo: Equatable {
     let firstUserMessage: String?  // Fallback title when no summary
     let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
+    var lastUserMessage: String? = nil  // Latest user prompt in the current turn
 }
 
 actor ConversationParser {
@@ -100,32 +101,165 @@ actor ConversationParser {
         }
     }
 
-    /// Parse a JSONL file to extract conversation info
+    /// Parse a JSONL file to extract conversation info (supports Claude and Codex)
     /// Uses caching based on file modification time
     func parse(sessionId: String, cwd: String) -> ConversationInfo {
-        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let sessionFile = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
-
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: sessionFile),
-              let attrs = try? fileManager.attributesOfItem(atPath: sessionFile),
+        var sessionFile: String?
+
+        // 1. Check Claude Code path
+        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+        let claudePath = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
+        if fileManager.fileExists(atPath: claudePath) {
+            sessionFile = claudePath
+        } else {
+            // 2. Check Codex path (~/.codex/sessions/**/rollout-*<sessionId>.jsonl)
+            sessionFile = findCodexSessionFile(sessionId: sessionId)
+        }
+
+        guard let resolvedPath = sessionFile,
+              let attrs = try? fileManager.attributesOfItem(atPath: resolvedPath),
               let modDate = attrs[.modificationDate] as? Date else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        if let cached = cache[sessionFile], cached.modificationDate == modDate {
+        if let cached = cache[resolvedPath], cached.modificationDate == modDate {
             return cached.info
         }
 
-        guard let data = fileManager.contents(atPath: sessionFile),
+        guard let data = fileManager.contents(atPath: resolvedPath),
               let content = String(data: data, encoding: .utf8) else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        let info = parseContent(content)
-        cache[sessionFile] = CachedInfo(modificationDate: modDate, info: info)
+        let info: ConversationInfo
+        if resolvedPath.contains(".codex") {
+            info = parseCodexContent(content)
+        } else {
+            info = parseContent(content)
+        }
 
+        cache[resolvedPath] = CachedInfo(modificationDate: modDate, info: info)
         return info
+    }
+
+    /// Finds the Codex session rollout JSONL file matching sessionId
+    private func findCodexSessionFile(sessionId: String) -> String? {
+        let fileManager = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let codexSessionsDir = home + "/.codex/sessions"
+        guard fileManager.fileExists(atPath: codexSessionsDir) else { return nil }
+
+        let enumerator = fileManager.enumerator(
+            at: URL(fileURLWithPath: codexSessionsDir),
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var matchedFile: (path: String, date: Date)?
+        while let fileURL = enumerator?.nextObject() as? URL {
+            let name = fileURL.lastPathComponent
+            if name.hasSuffix(".jsonl") && name.contains(sessionId) {
+                let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                if matchedFile == nil || modDate > matchedFile!.date {
+                    matchedFile = (fileURL.path, modDate)
+                }
+            }
+        }
+        return matchedFile?.path
+    }
+
+    /// Parse Codex JSONL content
+    private func parseCodexContent(_ content: String) -> ConversationInfo {
+        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+
+        var firstUserMessage: String?
+        var lastUserMessageDate: Date?
+        var lastUserMessage: String?
+        var lastMessage: String?
+        var lastMessageRole: String?
+        var lastToolName: String?
+        var usage = UsageInfo()
+        let formatter = Self.isoFormatter
+
+        // First user message
+        for line in lines {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+            if json["type"] as? String == "event_msg",
+               let payload = json["payload"] as? [String: Any],
+               payload["type"] as? String == "user_message",
+               let msg = payload["message"] as? String,
+               !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                firstUserMessage = Self.truncateMessage(msg.trimmingCharacters(in: .whitespacesAndNewlines), maxLength: 80)
+                break
+            }
+        }
+
+        // Search backward for last user message & last assistant message
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+
+            if lastUserMessage == nil,
+               json["type"] as? String == "event_msg",
+               let payload = json["payload"] as? [String: Any],
+               payload["type"] as? String == "user_message",
+               let msg = payload["message"] as? String,
+               !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                lastUserMessage = msg.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let tsStr = json["timestamp"] as? String {
+                    lastUserMessageDate = formatter.date(from: tsStr)
+                }
+            }
+
+            let type = json["type"] as? String
+            if lastMessage == nil {
+                if type == "response_item",
+                   let payload = json["payload"] as? [String: Any] {
+                    let role = payload["role"] as? String
+                    if role == "assistant" {
+                        if let contentArray = payload["content"] as? [[String: Any]] {
+                            for block in contentArray.reversed() {
+                                if block["type"] as? String == "output_text",
+                                   let text = block["text"] as? String,
+                                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    lastMessage = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    lastMessageRole = "assistant"
+                                    break
+                                }
+                            }
+                        }
+                    }
+                } else if type == "event_msg",
+                          let payload = json["payload"] as? [String: Any],
+                          payload["type"] as? String == "agent_message",
+                          let msg = payload["message"] as? String,
+                          !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastMessage = msg.trimmingCharacters(in: .whitespacesAndNewlines)
+                    lastMessageRole = "assistant"
+                }
+            }
+
+            if lastUserMessage != nil && lastMessage != nil {
+                break
+            }
+        }
+
+        return ConversationInfo(
+            summary: firstUserMessage,
+            lastMessage: lastMessage,
+            lastMessageRole: lastMessageRole,
+            lastToolName: lastToolName,
+            firstUserMessage: firstUserMessage,
+            lastUserMessageDate: lastUserMessageDate,
+            usage: usage,
+            lastUserMessage: lastUserMessage
+        )
     }
 
     /// Parse JSONL content
@@ -1131,3 +1265,5 @@ extension ConversationParser {
         return tools
     }
 }
+
+

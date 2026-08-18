@@ -57,6 +57,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     var lastActivity: Date
     var createdAt: Date
+    var turnStartTime: Date?
 
     // MARK: - Identifiable
 
@@ -81,7 +82,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
         ),
         needsClearReconciliation: Bool = false,
         lastActivity: Date = Date(),
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        turnStartTime: Date? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -97,6 +99,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.needsClearReconciliation = needsClearReconciliation
         self.lastActivity = lastActivity
         self.createdAt = createdAt
+        self.turnStartTime = turnStartTime
     }
 
     // MARK: - Derived Properties
@@ -348,3 +351,4 @@ struct TaskContext: Equatable, Sendable {
     var description: String?
     var subagentTools: [SubagentToolCall]
 }
+

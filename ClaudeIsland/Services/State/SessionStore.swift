@@ -155,6 +155,17 @@ actor SessionStore {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
         }
 
+        // Whenever transitioning to processing or user submits prompt, track turn start time
+        if event.event == "UserPromptSubmit" || (newPhase == .processing && session.turnStartTime == nil) {
+            session.turnStartTime = Date()
+        }
+
+        // When transition to waitingForInput or finished, update conversation info immediately
+        if newPhase == .waitingForInput {
+            let convInfo = await ConversationParser.shared.parse(sessionId: sessionId, cwd: session.cwd)
+            session.conversationInfo = convInfo
+        }
+
         if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
@@ -1141,3 +1152,4 @@ actor SessionStore {
         Array(sessions.values)
     }
 }
+
