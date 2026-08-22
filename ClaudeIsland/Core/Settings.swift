@@ -98,3 +98,4 @@ enum AppSettings {
         }
     }
 }
+

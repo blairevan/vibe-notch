@@ -556,3 +556,4 @@ struct MenuToggleRow: View {
         .white.opacity(isHovered ? 1.0 : 0.7)
     }
 }
+
