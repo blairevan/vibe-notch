@@ -1,86 +1,67 @@
+//
+//  AppDelegate.swift
+//  ClaudeIsland
+//
+//  Application delegate handling lifecycle and background monitoring.
+//
+
 import AppKit
+import Foundation
 import Sparkle
-import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    private var windowManager: WindowManager?
-    private var screenObserver: ScreenObserver?
-    private var updateCheckTimer: Timer?
+    var windowManager: WindowManager?
+    var screenObserver: ScreenObserver?
+    var updateCheckTimer: Timer?
+    let dingTalkCoordinator = DingTalkNotificationCoordinator()
 
-    static var shared: AppDelegate?
-    let updater: SPUUpdater
-    private let userDriver: NotchUserDriver
-
-    var windowController: NotchWindowController? {
-        windowManager?.windowController
-    }
-
-    override init() {
-        userDriver = NotchUserDriver()
-        updater = SPUUpdater(
-            hostBundle: Bundle.main,
-            applicationBundle: Bundle.main,
-            userDriver: userDriver,
-            delegate: nil
-        )
-        super.init()
-        AppDelegate.shared = self
-
-        do {
-            try updater.start()
-        } catch {
-            print("Failed to start Sparkle updater: \(error)")
-        }
+    /// Detect if running within an XCTest runner environment
+    static var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if !ensureSingleInstance() {
-            NSApplication.shared.terminate(nil)
+        // Skip UI setup and monitoring when running unit tests
+        if Self.isRunningUnitTests {
             return
         }
 
         HookInstaller.installIfNeeded()
+        dingTalkCoordinator.start()
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()
-        _ = windowManager?.setupNotchWindow()
+        windowManager?.setupNotchWindow()
 
         screenObserver = ScreenObserver { [weak self] in
-            self?.handleScreenChange()
+            self?.windowManager?.recreateWindow()
         }
 
-        if updater.canCheckForUpdates {
-            updater.checkForUpdates()
+        NotchViewModel.shared.startMonitoring()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.checkForUpdatesInBackground()
         }
 
-        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            guard let updater = self?.updater, updater.canCheckForUpdates else { return }
-            updater.checkForUpdates()
+        updateCheckTimer = Timer.scheduledTimer(
+            withTimeInterval: 86400,
+            repeats: true
+        ) { [weak self] _ in
+            self?.checkForUpdatesInBackground()
         }
-    }
-
-    private func handleScreenChange() {
-        _ = windowManager?.setupNotchWindow()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !Self.isRunningUnitTests else { return }
+
+        dingTalkCoordinator.stop()
         updateCheckTimer?.invalidate()
         screenObserver = nil
     }
 
-    private func ensureSingleInstance() -> Bool {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.farouqaldori.ClaudeIsland"
-        let runningApps = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == bundleID
-        }
-
-        if runningApps.count > 1 {
-            if let existingApp = runningApps.first(where: { $0.processIdentifier != getpid() }) {
-                existingApp.activate()
-            }
-            return false
-        }
-
-        return true
+    private func checkForUpdatesInBackground() {
+        guard AppSettings.automaticallyCheckForUpdates else { return }
+        UpdaterViewModel.shared.checkForUpdatesInBackground()
     }
 }

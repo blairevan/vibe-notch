@@ -11,7 +11,18 @@
 		FDA49F7E2EE11E3C00F9612E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FDA49F7F2EE11E3C00F9612E /* Sparkle */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A1000000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FD33FD552EDF32D7002A6548 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FD33FD5C2EDF32D7002A6548;
+			remoteInfo = ClaudeIsland;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		A10000000000000000000001 /* ClaudeIslandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudeIslandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD33FD5D2EDF32D7002A6548 /* Claude Island.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude Island.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -26,6 +37,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000002 /* ClaudeIslandTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ClaudeIslandTests;
+			sourceTree = "<group>";
+		};
 		FD33FD5F2EDF32D7002A6548 /* ClaudeIsland */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -37,6 +53,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FD33FD5A2EDF32D7002A6548 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -53,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				FD33FD5F2EDF32D7002A6548 /* ClaudeIsland */,
+				A10000000000000000000002 /* ClaudeIslandTests */,
 				FD33FD5E2EDF32D7002A6548 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				FD33FD5D2EDF32D7002A6548 /* Claude Island.app */,
+				A10000000000000000000001 /* ClaudeIslandTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -68,6 +93,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A10000000000000000000006 /* ClaudeIslandTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000007 /* Build configuration list for PBXNativeTarget "ClaudeIslandTests" */;
+			buildPhases = (
+				A10000000000000000000005 /* Sources */,
+				A10000000000000000000003 /* Frameworks */,
+				A10000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1000000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000002 /* ClaudeIslandTests */,
+			);
+			name = ClaudeIslandTests;
+			packageProductDependencies = (
+			);
+			productName = ClaudeIslandTests;
+			productReference = A10000000000000000000001 /* ClaudeIslandTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		FD33FD5C2EDF32D7002A6548 /* ClaudeIsland */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = FD33FD682EDF32D8002A6548 /* Build configuration list for PBXNativeTarget "ClaudeIsland" */;
@@ -102,6 +150,10 @@
 				LastSwiftUpdateCheck = 2610;
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
+					A10000000000000000000006 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = FD33FD5C2EDF32D7002A6548;
+					};
 					FD33FD5C2EDF32D7002A6548 = {
 						CreatedOnToolsVersion = 26.1.1;
 					};
@@ -126,11 +178,19 @@
 			projectRoot = "";
 			targets = (
 				FD33FD5C2EDF32D7002A6548 /* ClaudeIsland */,
+				A10000000000000000000006 /* ClaudeIslandTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FD33FD5B2EDF32D7002A6548 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -141,6 +201,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FD33FD592EDF32D7002A6548 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -150,7 +217,49 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		A1000000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FD33FD5C2EDF32D7002A6548 /* ClaudeIsland */;
+			targetProxy = A1000000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		A10000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2DKS5U9LV4;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.celestial.ClaudeIslandTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vibe Notch.app/Contents/MacOS/Vibe Notch";
+			};
+			name = Debug;
+		};
+		A10000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2DKS5U9LV4;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.celestial.ClaudeIslandTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vibe Notch.app/Contents/MacOS/Vibe Notch";
+			};
+			name = Release;
+		};
 		FD33FD662EDF32D8002A6548 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -344,6 +453,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A10000000000000000000007 /* Build configuration list for PBXNativeTarget "ClaudeIslandTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000008 /* Debug */,
+				A10000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		FD33FD582EDF32D7002A6548 /* Build configuration list for PBXProject "ClaudeIsland" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

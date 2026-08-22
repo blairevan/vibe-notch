@@ -40,6 +40,7 @@ struct ConversationInfo: Equatable {
     let firstUserMessage: String?  // Fallback title when no summary
     let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
+    var lastUserMessage: String? = nil  // Latest user prompt in the current turn
 }
 
 actor ConversationParser {
@@ -100,32 +101,265 @@ actor ConversationParser {
         }
     }
 
-    /// Parse a JSONL file to extract conversation info
+    /// Parse a JSONL file to extract conversation info (supports Claude and Codex)
     /// Uses caching based on file modification time
     func parse(sessionId: String, cwd: String) -> ConversationInfo {
-        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let sessionFile = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
-
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: sessionFile),
-              let attrs = try? fileManager.attributesOfItem(atPath: sessionFile),
+        var sessionFile: String?
+
+        // 1. Check Claude Code path
+        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+        let claudePath = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
+        if fileManager.fileExists(atPath: claudePath) {
+            sessionFile = claudePath
+        } else {
+            // 2. Check Codex path (~/.codex/sessions/**/rollout-*<sessionId>.jsonl)
+            sessionFile = findCodexSessionFile(sessionId: sessionId)
+        }
+
+        guard let resolvedPath = sessionFile,
+              let attrs = try? fileManager.attributesOfItem(atPath: resolvedPath),
               let modDate = attrs[.modificationDate] as? Date else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        if let cached = cache[sessionFile], cached.modificationDate == modDate {
+        if let cached = cache[resolvedPath], cached.modificationDate == modDate {
             return cached.info
         }
 
-        guard let data = fileManager.contents(atPath: sessionFile),
+        guard let data = fileManager.contents(atPath: resolvedPath),
               let content = String(data: data, encoding: .utf8) else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        let info = parseContent(content)
-        cache[sessionFile] = CachedInfo(modificationDate: modDate, info: info)
+        let info: ConversationInfo
+        if resolvedPath.contains(".codex") {
+            info = parseCodexContent(content)
+        } else {
+            info = parseContent(content)
+        }
 
+        cache[resolvedPath] = CachedInfo(modificationDate: modDate, info: info)
         return info
+    }
+
+    /// Finds the Codex session rollout JSONL file matching sessionId
+    private func findCodexSessionFile(sessionId: String) -> String? {
+        let fileManager = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let codexSessionsDir = home + "/.codex/sessions"
+        guard fileManager.fileExists(atPath: codexSessionsDir) else { return nil }
+
+        let enumerator = fileManager.enumerator(
+            at: URL(fileURLWithPath: codexSessionsDir),
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var matchedFile: (path: String, date: Date)?
+        while let fileURL = enumerator?.nextObject() as? URL {
+            let name = fileURL.lastPathComponent
+            if name.hasSuffix(".jsonl") && name.contains(sessionId) {
+                let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                if matchedFile == nil || modDate > matchedFile!.date {
+                    matchedFile = (fileURL.path, modDate)
+                }
+            }
+        }
+        return matchedFile?.path
+    }
+
+    /// Cleans ambient contexts, system instructions, and extracts direct prompt if available
+    private static func cleanUserPrompt(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return raw }
+
+        // 1. If "## My request:" or "## My request for Codex:" exists, extract the content after it
+        if let match = trimmed.range(of: "## My request(?: for Codex)?:\\s*", options: .regularExpression) {
+            let after = String(trimmed[match.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !after.isEmpty {
+                return after
+            }
+        }
+
+        // 2. Strip XML blocks that Codex prepends (recommended plugins, instructions, environment context, in-app browser)
+        var cleaned = trimmed
+        let tagPatterns = [
+            "<recommended_plugins>[\\s\\S]*?</recommended_plugins>",
+            "<INSTRUCTIONS>[\\s\\S]*?</INSTRUCTIONS>",
+            "<environment_context>[\\s\\S]*?</environment_context>",
+            "<in-app-browser-context[\\s\\S]*?</in-app-browser-context>",
+            "<app-context>[\\s\\S]*?</app-context>",
+            "<skills_instructions>[\\s\\S]*?</skills_instructions>",
+            "<collaboration_mode>[\\s\\S]*?</collaboration_mode>",
+            "<permissions instructions>[\\s\\S]*?</permissions instructions>"
+        ]
+        for pattern in tagPatterns {
+            cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        cleaned = cleaned.replacingOccurrences(of: "# AGENTS\\.md instructions", with: "", options: .regularExpression)
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? trimmed : cleaned
+    }
+
+    /// Extracts user message text and timestamp from a Codex JSON line object
+    private static func extractCodexUserMessage(from json: [String: Any]) -> (text: String, date: Date?)? {
+        let type = json["type"] as? String
+        let timestampStr = json["timestamp"] as? String
+        let date = timestampStr.flatMap { Self.isoFormatter.date(from: $0) }
+
+        // 1. Legacy format: event_msg with payload.type == "user_message"
+        if type == "event_msg",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "user_message",
+           let msg = payload["message"] as? String,
+           !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let cleaned = cleanUserPrompt(msg)
+            return (cleaned, date)
+        }
+
+        // 2. Modern event_msg: item_completed with item.type == "UserMessage" (or "user_message")
+        if type == "event_msg",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "item_completed",
+           let item = payload["item"] as? [String: Any],
+           let itemType = item["type"] as? String,
+           itemType == "UserMessage" || itemType == "user_message" {
+            if let contentArray = item["content"] as? [[String: Any]] {
+                let texts = contentArray.compactMap { block -> String? in
+                    guard let text = block["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if !texts.isEmpty {
+                    let cleaned = cleanUserPrompt(texts.joined(separator: "\n"))
+                    return (cleaned, date)
+                }
+            }
+            if let text = item["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (cleanUserPrompt(text), date)
+            }
+            if let msg = item["message"] as? String, !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (cleanUserPrompt(msg), date)
+            }
+        }
+
+        // 3. response_item format: role == "user"
+        if type == "response_item",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "message",
+           payload["role"] as? String == "user" {
+            if let contentArray = payload["content"] as? [[String: Any]] {
+                let texts = contentArray.compactMap { block -> String? in
+                    guard let text = block["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if !texts.isEmpty {
+                    let cleaned = cleanUserPrompt(texts.joined(separator: "\n"))
+                    return (cleaned, date)
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Parse Codex JSONL content
+    private func parseCodexContent(_ content: String) -> ConversationInfo {
+        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+
+        var firstUserMessage: String?
+        var lastUserMessageDate: Date?
+        var lastUserMessage: String?
+        var lastMessage: String?
+        var lastMessageRole: String?
+        var lastToolName: String?
+        var usage = UsageInfo()
+
+        // First user message
+        for line in lines {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+            if let userMsg = Self.extractCodexUserMessage(from: json) {
+                firstUserMessage = Self.truncateMessage(userMsg.text, maxLength: 80)
+                break
+            }
+        }
+
+        // Search backward for last user message & last assistant message
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+
+            if lastUserMessage == nil {
+                if let userMsg = Self.extractCodexUserMessage(from: json) {
+                    lastUserMessage = userMsg.text
+                    lastUserMessageDate = userMsg.date
+                }
+            }
+
+            let type = json["type"] as? String
+            if lastMessage == nil {
+                if type == "response_item",
+                   let payload = json["payload"] as? [String: Any] {
+                    let role = payload["role"] as? String
+                    if role == "assistant" {
+                        if let contentArray = payload["content"] as? [[String: Any]] {
+                            for block in contentArray.reversed() {
+                                if block["type"] as? String == "output_text",
+                                   let text = block["text"] as? String,
+                                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    lastMessage = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    lastMessageRole = "assistant"
+                                    break
+                                }
+                            }
+                        }
+                    }
+                } else if type == "event_msg",
+                          let payload = json["payload"] as? [String: Any],
+                          payload["type"] as? String == "agent_message",
+                          let msg = payload["message"] as? String,
+                          !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastMessage = msg.trimmingCharacters(in: .whitespacesAndNewlines)
+                    lastMessageRole = "assistant"
+                } else if type == "event_msg",
+                          let payload = json["payload"] as? [String: Any],
+                          payload["type"] as? String == "item_completed",
+                          let item = payload["item"] as? [String: Any],
+                          let itemType = item["type"] as? String,
+                          itemType == "AgentMessage" || itemType == "agent_message" {
+                    if let contentArray = item["content"] as? [[String: Any]] {
+                        for block in contentArray.reversed() {
+                            if let text = block["text"] as? String,
+                               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                lastMessage = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                lastMessageRole = "assistant"
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+
+            if lastUserMessage != nil && lastMessage != nil {
+                break
+            }
+        }
+
+        return ConversationInfo(
+            summary: firstUserMessage,
+            lastMessage: lastMessage,
+            lastMessageRole: lastMessageRole,
+            lastToolName: lastToolName,
+            firstUserMessage: firstUserMessage,
+            lastUserMessageDate: lastUserMessageDate,
+            usage: usage,
+            lastUserMessage: lastUserMessage
+        )
     }
 
     /// Parse JSONL content
@@ -1038,6 +1272,16 @@ actor ConversationParser {
 
         return tools
     }
+
+#if DEBUG
+    func parseContentForTesting(_ content: String, isCodex: Bool) -> ConversationInfo {
+        if isCodex {
+            return parseCodexContent(content)
+        } else {
+            return parseContent(content)
+        }
+    }
+#endif
 }
 
 /// Info about a subagent tool call parsed from JSONL
@@ -1131,3 +1375,7 @@ extension ConversationParser {
         return tools
     }
 }
+
+
+
+
