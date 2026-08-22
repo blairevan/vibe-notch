@@ -169,6 +169,100 @@ actor ConversationParser {
         return matchedFile?.path
     }
 
+    /// Cleans ambient contexts, system instructions, and extracts direct prompt if available
+    private static func cleanUserPrompt(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return raw }
+
+        // 1. If "## My request:" or "## My request for Codex:" exists, extract the content after it
+        if let match = trimmed.range(of: "## My request(?: for Codex)?:\\s*", options: .regularExpression) {
+            let after = String(trimmed[match.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !after.isEmpty {
+                return after
+            }
+        }
+
+        // 2. Strip XML blocks that Codex prepends (recommended plugins, instructions, environment context, in-app browser)
+        var cleaned = trimmed
+        let tagPatterns = [
+            "<recommended_plugins>[\\s\\S]*?</recommended_plugins>",
+            "<INSTRUCTIONS>[\\s\\S]*?</INSTRUCTIONS>",
+            "<environment_context>[\\s\\S]*?</environment_context>",
+            "<in-app-browser-context[\\s\\S]*?</in-app-browser-context>",
+            "<app-context>[\\s\\S]*?</app-context>",
+            "<skills_instructions>[\\s\\S]*?</skills_instructions>",
+            "<collaboration_mode>[\\s\\S]*?</collaboration_mode>",
+            "<permissions instructions>[\\s\\S]*?</permissions instructions>"
+        ]
+        for pattern in tagPatterns {
+            cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        cleaned = cleaned.replacingOccurrences(of: "# AGENTS\\.md instructions", with: "", options: .regularExpression)
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? trimmed : cleaned
+    }
+
+    /// Extracts user message text and timestamp from a Codex JSON line object
+    private static func extractCodexUserMessage(from json: [String: Any]) -> (text: String, date: Date?)? {
+        let type = json["type"] as? String
+        let timestampStr = json["timestamp"] as? String
+        let date = timestampStr.flatMap { Self.isoFormatter.date(from: $0) }
+
+        // 1. Legacy format: event_msg with payload.type == "user_message"
+        if type == "event_msg",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "user_message",
+           let msg = payload["message"] as? String,
+           !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let cleaned = cleanUserPrompt(msg)
+            return (cleaned, date)
+        }
+
+        // 2. Modern event_msg: item_completed with item.type == "UserMessage" (or "user_message")
+        if type == "event_msg",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "item_completed",
+           let item = payload["item"] as? [String: Any],
+           let itemType = item["type"] as? String,
+           itemType == "UserMessage" || itemType == "user_message" {
+            if let contentArray = item["content"] as? [[String: Any]] {
+                let texts = contentArray.compactMap { block -> String? in
+                    guard let text = block["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if !texts.isEmpty {
+                    let cleaned = cleanUserPrompt(texts.joined(separator: "\n"))
+                    return (cleaned, date)
+                }
+            }
+            if let text = item["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (cleanUserPrompt(text), date)
+            }
+            if let msg = item["message"] as? String, !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (cleanUserPrompt(msg), date)
+            }
+        }
+
+        // 3. response_item format: role == "user"
+        if type == "response_item",
+           let payload = json["payload"] as? [String: Any],
+           payload["type"] as? String == "message",
+           payload["role"] as? String == "user" {
+            if let contentArray = payload["content"] as? [[String: Any]] {
+                let texts = contentArray.compactMap { block -> String? in
+                    guard let text = block["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if !texts.isEmpty {
+                    let cleaned = cleanUserPrompt(texts.joined(separator: "\n"))
+                    return (cleaned, date)
+                }
+            }
+        }
+
+        return nil
+    }
+
     /// Parse Codex JSONL content
     private func parseCodexContent(_ content: String) -> ConversationInfo {
         let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
@@ -180,7 +274,6 @@ actor ConversationParser {
         var lastMessageRole: String?
         var lastToolName: String?
         var usage = UsageInfo()
-        let formatter = Self.isoFormatter
 
         // First user message
         for line in lines {
@@ -188,12 +281,8 @@ actor ConversationParser {
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
                 continue
             }
-            if json["type"] as? String == "event_msg",
-               let payload = json["payload"] as? [String: Any],
-               payload["type"] as? String == "user_message",
-               let msg = payload["message"] as? String,
-               !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                firstUserMessage = Self.truncateMessage(msg.trimmingCharacters(in: .whitespacesAndNewlines), maxLength: 80)
+            if let userMsg = Self.extractCodexUserMessage(from: json) {
+                firstUserMessage = Self.truncateMessage(userMsg.text, maxLength: 80)
                 break
             }
         }
@@ -205,15 +294,10 @@ actor ConversationParser {
                 continue
             }
 
-            if lastUserMessage == nil,
-               json["type"] as? String == "event_msg",
-               let payload = json["payload"] as? [String: Any],
-               payload["type"] as? String == "user_message",
-               let msg = payload["message"] as? String,
-               !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                lastUserMessage = msg.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let tsStr = json["timestamp"] as? String {
-                    lastUserMessageDate = formatter.date(from: tsStr)
+            if lastUserMessage == nil {
+                if let userMsg = Self.extractCodexUserMessage(from: json) {
+                    lastUserMessage = userMsg.text
+                    lastUserMessageDate = userMsg.date
                 }
             }
 
@@ -242,6 +326,22 @@ actor ConversationParser {
                           !msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     lastMessage = msg.trimmingCharacters(in: .whitespacesAndNewlines)
                     lastMessageRole = "assistant"
+                } else if type == "event_msg",
+                          let payload = json["payload"] as? [String: Any],
+                          payload["type"] as? String == "item_completed",
+                          let item = payload["item"] as? [String: Any],
+                          let itemType = item["type"] as? String,
+                          itemType == "AgentMessage" || itemType == "agent_message" {
+                    if let contentArray = item["content"] as? [[String: Any]] {
+                        for block in contentArray.reversed() {
+                            if let text = block["text"] as? String,
+                               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                lastMessage = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                lastMessageRole = "assistant"
+                                break
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1172,6 +1272,16 @@ actor ConversationParser {
 
         return tools
     }
+
+#if DEBUG
+    func parseContentForTesting(_ content: String, isCodex: Bool) -> ConversationInfo {
+        if isCodex {
+            return parseCodexContent(content)
+        } else {
+            return parseContent(content)
+        }
+    }
+#endif
 }
 
 /// Info about a subagent tool call parsed from JSONL
@@ -1265,5 +1375,7 @@ extension ConversationParser {
         return tools
     }
 }
+
+
 
 

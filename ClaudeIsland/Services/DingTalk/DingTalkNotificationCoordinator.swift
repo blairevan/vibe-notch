@@ -226,7 +226,7 @@ final class DingTalkNotificationCoordinator {
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = [dbPath, "SELECT title FROM threads WHERE id = '\(sessionId)' LIMIT 1;"]
+        process.arguments = [dbPath, "SELECT COALESCE(NULLIF(name, ''), title) FROM threads WHERE id = '\(sessionId)' LIMIT 1;"]
         process.standardOutput = pipe
 
         do {
@@ -348,6 +348,7 @@ private enum PhaseMarker: Equatable {
         }
     }
 }
+
 
 
 

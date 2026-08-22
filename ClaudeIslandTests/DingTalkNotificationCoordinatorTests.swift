@@ -205,6 +205,34 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(text.contains("Codex Desktop (PID: 66809)"))
     }
 
+    /// Verifies modern Codex rollout parsing with item_completed UserMessage and AgentMessage.
+    func testModernCodexRolloutMessageParsing() async {
+        let jsonl = [
+            "{\"type\":\"session_meta\",\"payload\":{\"cli_version\":\"0.149.0-alpha.4\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"UserMessage\",\"content\":[{\"type\":\"text\",\"text\":\"<in-app-browser-context>tab 1</in-app-browser-context>\\n\\n## My request:\\n执行单元测试并验证结果\"}]}}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"AgentMessage\",\"content\":[{\"type\":\"Text\",\"text\":\"全部 26 个测试用例已通过！\"}]}}}"
+        ].joined(separator: "\n")
+        
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isCodex: true)
+        XCTAssertEqual(info.lastUserMessage, "执行单元测试并验证结果")
+        XCTAssertEqual(info.firstUserMessage, "执行单元测试并验证结果")
+        XCTAssertEqual(info.lastMessage, "全部 26 个测试用例已通过！")
+        XCTAssertEqual(info.lastMessageRole, "assistant")
+    }
+
+    func testLegacyCodexRolloutMessageParsing() async {
+        let jsonl = """
+        {"type":"session_meta","payload":{"cli_version":"0.148.0-alpha.15"}}
+        {"type":"event_msg","payload":{"type":"user_message","message":"审查当前修改的代码"}}
+        {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"审查完成，无异常。"}]}}
+        """
+        
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isCodex: true)
+        XCTAssertEqual(info.lastUserMessage, "审查当前修改的代码")
+        XCTAssertEqual(info.firstUserMessage, "审查当前修改的代码")
+        XCTAssertEqual(info.lastMessage, "审查完成，无异常。")
+    }
+
     /// Creates a coordinator with deterministic credentials, time, and transport.
     private func makeCoordinator(
         recorder: MessageRecorder,
@@ -269,6 +297,8 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
+
+
 
 
 
