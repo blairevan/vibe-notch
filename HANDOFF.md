@@ -68,10 +68,45 @@
 
 ---
 
+---
+
+## 2.3 2026-08-23 DSH (DeepSeek Harness) 消息通知对接
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-23 | `ConversationParser.swift` | 新增 `findDshSessionFile`、`readSessionFileContent` (支持 `zstd` 解压) 以及 `parseDshContent`，解析 `~/.dsh/sessions/` 会话。 | ✅ |
+| 2026-08-23 | `DingTalkNotificationCoordinator.swift` | 适配 DSH 客户端终端标识与会话主题提取（优先使用 `session/title` LLM 标题）。 | ✅ |
+| 2026-08-23 | `HookInstaller.swift` | 新增 `installDshPluginIfNeeded`，自动分发 `dsh-vibe-notch` 插件并注册到 DSH profile。 | ✅ |
+| 2026-08-23 | `ClaudeIsland/Resources/dsh-vibe-notch/` | 提供 DSH Cordis 插件，监听 `session/created`、`turn/start`、`tool/call`、`tool/result`、`approval/asked`、`turn/end` 并桥接至 Unix Socket。 | ✅ |
+| 2026-08-23 | `DingTalkNotificationCoordinatorTests.swift` | 新增 DSH 会话解析、任务完成与权限审批钉钉通知、`<system-reminder>` 清洗、真实文件加载等单元测试。 | ✅ |
+
+### 验证结果
+
+- **单元测试**: 执行 `xcodebuild test -project ClaudeIsland.xcodeproj -scheme ClaudeIsland -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`，全量 31 个测试用例全部通过（0 failure）。
+- **真实数据验证**: 对接 `~/.dsh/sessions/` 下真实 `session.jsonl.zstd` 会话记录，成功解析标题、Prompt 与执行结果。
+
+### 2.4 2026-08-23 DSH 通知连通性故障彻底修复与根因总结
+
+1. **Cordis 事件 Carrier Scope 隔离**:
+   - DSH 内部的 `session/*` 事件带有 carrier 作用域过滤。普通 `ctx.on` 在未指定 `{ global: true }` 时会被 filter 拦截，插件虽然被加载但收不到事件流。已通过显式 `{ global: true }` 解决。
+2. **macOS Foundation Process 管道死锁 (Pipe Buffer Deadlock)**:
+   - DSH 会话解压数据量大（含全量 skills 与 system-prompt，通常 >64KB）。在 `ConversationParser.swift` 中，若先 `process.waitUntilExit()` 再 `readDataToEndOfFile()`，会导致子进程阻塞在满溢的管道缓冲区，父进程死等子进程退出，引发永久死锁。
+   - 修复：先 drain 读取管道数据流，再 wait 进程退出，彻底根除死锁。
+3. **后台常驻服务与 UI 视图生命周期解耦**:
+   - Socket 监听 (`HookSocketServer`) 之前绑定在 SwiftUI `NotchView.onAppear`，无物理刘海或 Accessory 启动时视图可能不触发 appear，导致 Socket 事件被无声丢弃。
+   - 修复：在 `ClaudeSessionMonitor` 引入全局单例，由 `AppDelegate.applicationDidFinishLaunching` 统一启动常驻后台服务。
+4. **DSH 凭证与代码语法合规**:
+   - `~/.dsh/.credentials.yaml` 规范化为扁平键值对映射，修复 `dsh-credentials-local` 启动拦截。
+
+---
+
 ## 6. 修订记录
 
 | 修订时间 | 修订人 | 修订小结 |
 | :--- | :--- | :--- |
-| 2026-08-22 23:15:00 | Assistant | 初始化 HANDOFF.md，记录 Codex 升级导致钉钉通知字段异常的排查链路、代码改动、单元测试、踩坑经验与后续计划。 |
-
+| 2026-08-22 23:15:00 | Assistant | 初始化 HANDOFF.md，记录 Codex 升级导致钉钉通知字段异常的排查链路与修复。 |
+| 2026-08-23 01:20:00 | Assistant | 完成 Vibe Notch 对接 DSH (DeepSeek Harness) 消息通知的全链路开发与测试验证。 |
+| 2026-08-23 08:15:00 | Assistant | 彻底排查并修复 DSH 与 Codex 双端通知未达问题（消除了 Pipe 死锁、Cordis 事件隔离并解耦后台生命周期）。 |
 

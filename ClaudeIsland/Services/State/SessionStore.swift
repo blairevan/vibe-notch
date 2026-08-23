@@ -180,14 +180,22 @@ actor SessionStore {
     }
 
     private func createSession(from event: HookEvent) -> SessionState {
-        SessionState(
+        var convInfo = ConversationInfo()
+        if let client = event.client {
+            convInfo.clientName = client
+        } else if event.sessionId.hasPrefix("session-") || event.cwd.contains(".dsh") {
+            convInfo.clientName = "dsh"
+        }
+
+        return SessionState(
             sessionId: event.sessionId,
             cwd: event.cwd,
             projectName: URL(fileURLWithPath: event.cwd).lastPathComponent,
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
             isInTmux: false,  // Will be updated
-            phase: .idle
+            phase: .idle,
+            conversationInfo: convInfo
         )
     }
 
@@ -1145,4 +1153,3 @@ actor SessionStore {
         Array(sessions.values)
     }
 }
-

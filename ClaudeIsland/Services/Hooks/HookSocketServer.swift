@@ -25,10 +25,11 @@ struct HookEvent: Codable, Sendable {
     let toolUseId: String?
     let notificationType: String?
     let message: String?
+    let client: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
-        case cwd, event, status, pid, tty, tool
+        case cwd, event, status, pid, tty, tool, client
         case toolInput = "tool_input"
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
@@ -36,7 +37,7 @@ struct HookEvent: Codable, Sendable {
     }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, client: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -48,6 +49,7 @@ struct HookEvent: Codable, Sendable {
         self.toolUseId = toolUseId
         self.notificationType = notificationType
         self.message = message
+        self.client = client
     }
 
     var sessionPhase: SessionPhase {
@@ -407,11 +409,19 @@ class HookSocketServer {
 
         guard let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
             logger.warning("Failed to parse event: \(String(data: data, encoding: .utf8) ?? "?", privacy: .public)")
+            let errLine = "[\(getpid())] [socket-server] JSON decode FAILED: \(String(data: data, encoding: .utf8) ?? "?")\n"
+            if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            }
             close(clientSocket)
             return
         }
 
         logger.debug("Received: \(event.event, privacy: .public) for \(event.sessionId.prefix(8), privacy: .public)")
+        let okLine = "[\(getpid())] [socket-server] RECEIVED: event=\(event.event) status=\(event.status) sid=\(event.sessionId.prefix(8))\n"
+        if let d = okLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+            fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+        }
 
         if event.event == "PreToolUse" {
             cacheToolUseId(event: event)
@@ -447,7 +457,8 @@ class HookSocketServer {
                 toolInput: event.toolInput,
                 toolUseId: toolUseId,  // Use resolved toolUseId
                 notificationType: event.notificationType,
-                message: event.message
+                message: event.message,
+                client: event.client
             )
 
             let pending = PendingPermission(

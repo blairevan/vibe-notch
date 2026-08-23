@@ -233,7 +233,166 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(info.lastMessage, "审查完成，无异常。")
     }
 
-    /// Creates a coordinator with deterministic credentials, time, and transport.
+
+        /// Verifies DSH (DeepSeek Harness) transcript parsing with session/title, user prompt, and assistant message.
+    func testDshSessionTranscriptParsing() async {
+        let lines = [
+            #"{"type":"session","version":0,"id":"session-ce2c609f-1e64-4391-ae57-0a1db6d1bfb2","createdAt":1787319666416,"cwd":"/opt/app/aitools"}"#,
+            #"{"type":"session/title","seq":18,"time":1787319721739,"data":{"title":"http://127.0.0.1:3080/ 网页版","source":{"kind":"fallback"}}}"#,
+            #"{"type":"user/message","seq":14,"time":1787319721737,"data":{"content":[{"type":"text","text":"The approval policy changed to never"}],"source":{"kind":"plugin","plugin":"user-approval"},"role":"user"}}"#,
+            #"{"type":"user/message","seq":15,"time":1787319721738,"data":{"content":[{"type":"text","text":"网页版和 desktop 版不能并存吗？"}],"source":{"kind":"user"},"role":"user"}}"#,
+            #"{"type":"session/title","seq":27,"time":1787319723295,"data":{"title":"网页版和desktop版能否并存","source":{"kind":"provider"}}}"#,
+            #"{"type":"turn/start","seq":10,"time":1787319721723,"data":{"turn":1}}"#,
+            #"{"type":"tool/call","seq":120,"time":1787319722000,"data":{"tool":"read","callId":"call-1","input":{"file_path":"config.json"}}}"#,
+            #"{"type":"tool/result","seq":121,"time":1787319722100,"data":{"callId":"call-1","result":"ok"}}"#,
+            #"{"type":"assistant/message","seq":3319,"time":1787321622693,"data":{"turn":1,"step":2,"message":{"role":"assistant","content":[{"type":"reasoning","text":"Analyzing port conflict..."},{"type":"text","text":"答案是：不能并存。两个实例存在账本文件锁冲突。"}],"source":{"kind":"model","provider":"deepseek-official","model":"deepseek-v4-pro"}},"usage":{"inputTokens":1299,"outputTokens":387,"cacheReadTokens":49152}}}"#,
+            #"{"type":"turn/end","seq":3321,"time":1787321622694,"data":{"turn":1,"reason":{"kind":"completed"}}}"#
+        ]
+        let jsonl = lines.joined(separator: "\n")
+
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isDsh: true)
+        XCTAssertEqual(info.clientName, "dsh")
+        XCTAssertEqual(info.summary, "网页版和desktop版能否并存")
+        XCTAssertEqual(info.firstUserMessage, "网页版和 desktop 版不能并存吗？")
+        XCTAssertEqual(info.lastUserMessage, "网页版和 desktop 版不能并存吗？")
+        XCTAssertEqual(info.lastMessage, "答案是：不能并存。两个实例存在账本文件锁冲突。")
+        XCTAssertEqual(info.lastMessageRole, "assistant")
+        XCTAssertEqual(info.usage.inputTokens, 1299)
+        XCTAssertEqual(info.usage.outputTokens, 387)
+    }
+
+    /// Verifies DSH task completed notification output formatted for DingTalk.
+    func testDshTaskCompletedDingTalkNotification() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        let session = SessionState(
+            sessionId: "session-ce2c609f-1e64-4391-ae57-0a1db6d1bfb2",
+            cwd: "/opt/app/aitools",
+            projectName: "aitools",
+            pid: 38777,
+            tty: nil,
+            phase: .processing,
+            conversationInfo: ConversationInfo(
+                summary: "网页版和desktop版能否并存",
+                lastMessage: "答案是：不能并存。两个实例存在账本文件锁冲突。",
+                lastMessageRole: "assistant",
+                lastToolName: nil,
+                firstUserMessage: "网页版和 desktop 版不能并存吗？",
+                lastUserMessageDate: nil,
+                lastUserMessage: "网页版和 desktop 版不能并存吗？",
+                clientName: "dsh"
+            )
+        )
+
+        await coordinator.processSnapshot([session])
+        var waitingSession = session
+        waitingSession.phase = .waitingForInput
+        await coordinator.processSnapshot([waitingSession])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+        let text = recorder.messages.first?.text ?? ""
+        XCTAssertTrue(text.contains("### 🚀 Vibe Notch - 任务已完成"))
+        XCTAssertTrue(text.contains(#"- **项目**：`aitools`"#))
+        XCTAssertTrue(text.contains("- **主题**：网页版和desktop版能否并存"))
+        XCTAssertTrue(text.contains("- **状态**：✅ 执行完成 (等待输入)"))
+        XCTAssertTrue(text.contains("网页版和 desktop 版不能并存吗？"))
+        XCTAssertTrue(text.contains("答案是：不能并存。两个实例存在账本文件锁冲突。"))
+        XCTAssertTrue(text.contains("- **终端**：DSH"))
+    }
+
+    /// Verifies DSH permission request notification output.
+    func testDshPermissionRequestDingTalkNotification() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        var session = SessionState(
+            sessionId: "session-ce2c609f-1e64-4391-ae57-0a1db6d1bfb2",
+            cwd: "/opt/app/aitools",
+            projectName: "aitools",
+            pid: 38777,
+            tty: nil,
+            phase: .processing,
+            conversationInfo: ConversationInfo(
+                summary: "配置修复",
+                lastMessage: nil,
+                lastMessageRole: nil,
+                lastToolName: nil,
+                firstUserMessage: "修复配置",
+                lastUserMessageDate: nil,
+                clientName: "dsh"
+            )
+        )
+
+        await coordinator.processSnapshot([session])
+        session.phase = .waitingForApproval(PermissionContext(
+            toolUseId: "call-edit-1",
+            toolName: "edit",
+            toolInput: nil,
+            receivedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        await coordinator.processSnapshot([session])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+        let text = recorder.messages.first?.text ?? ""
+        XCTAssertTrue(text.contains("### ⚠️ Vibe Notch - 需要权限审批"))
+        XCTAssertTrue(text.contains(#"- **项目**：`aitools`"#))
+        XCTAssertTrue(text.contains(#"- **工具**：`edit`"#))
+        XCTAssertTrue(text.contains("- **状态**：⏳ 等待权限审批"))
+        XCTAssertTrue(text.contains("- **终端**：DSH Desktop (PID: 38777)"))
+    }
+
+    /// Verifies system reminder and skill instruction blocks are stripped from user prompt.
+    func testDshSystemReminderStripping() async {
+        let lines = [
+            #"{"type":"session","version":0,"id":"session-123","createdAt":1787319666416,"cwd":"/opt/app/aitools"}"#,
+            #"{"type":"user/message","seq":1,"data":{"content":[{"type":"text","text":"<system-reminder>\nAvailable skills...\n</system-reminder>\n\n## My request:\n帮我分析项目结构"}],"source":{"kind":"user"},"role":"user"}}"#
+        ]
+        let jsonl = lines.joined(separator: "\n")
+
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isDsh: true)
+        XCTAssertEqual(info.lastUserMessage, "帮我分析项目结构")
+        XCTAssertEqual(info.firstUserMessage, "帮我分析项目结构")
+    }
+
+
+    /// Tests live file parsing from disk if ~/.dsh session exists
+    func testLiveDshSessionFileParsing() async {
+        let sid = "session-4b2822c6-744a-4423-867b-75444f71bde2"
+        let info = await ConversationParser.shared.parse(sessionId: sid, cwd: "/opt/app/aitools")
+        if info.clientName == "dsh" {
+            XCTAssertEqual(info.clientName, "dsh")
+            XCTAssertNotNil(info.summary)
+            XCTAssertNotNil(info.lastMessage)
+        }
+    }
+
+    
+    /// Verifies HookInstaller creates and registers the DSH plugin if ~/.dsh exists.
+    func testHookInstallerDshPlugin() {
+        HookInstaller.installDshPluginIfNeeded()
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        if fm.fileExists(atPath: home + "/.dsh") {
+            let pkgPath = home + "/.dsh/plugins/dsh-vibe-notch/package.json"
+            let indexPath = home + "/.dsh/plugins/dsh-vibe-notch/lib/index.js"
+            XCTAssertTrue(fm.fileExists(atPath: pkgPath))
+            XCTAssertTrue(fm.fileExists(atPath: indexPath))
+
+            let profilePath = home + "/.dsh/profiles/web/package.json"
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
+               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                let deps = json["dependencies"] as? [String: Any] ?? [:]
+                let dsh = json["dsh"] as? [String: Any] ?? [:]
+                let profile = dsh["profile"] as? [String: Any] ?? [:]
+                let bundles = profile["bundles"] as? [String] ?? []
+                XCTAssertNotNil(deps["dsh-vibe-notch"])
+                XCTAssertTrue(bundles.contains("dsh-vibe-notch"))
+            }
+        }
+    }
+
+        /// Creates a coordinator with deterministic credentials, time, and transport.
     private func makeCoordinator(
         recorder: MessageRecorder,
         isEnabled: @escaping () -> Bool = { true }
@@ -297,7 +456,6 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-
 
 
 

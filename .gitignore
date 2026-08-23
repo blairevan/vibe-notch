@@ -42,3 +42,18 @@ releases/
 # Xcode backup
 *.xcodeproj.backup/
 CLAUDE.md
+
+# Logs and temporary testing outputs
+*.log
+.playwright-mcp/
+.dsh/
+
+# Local data & credentials
+*.sqlite
+*.sqlite-*
+*.token
+*.key
+*.pem
+*.p8
+*.secret
+dingtalk.json

@@ -33,14 +33,37 @@ struct UsageInfo: Equatable {
 }
 
 struct ConversationInfo: Equatable {
-    let summary: String?
-    let lastMessage: String?
-    let lastMessageRole: String?  // "user", "assistant", or "tool"
-    let lastToolName: String?  // Tool name if lastMessageRole is "tool"
-    let firstUserMessage: String?  // Fallback title when no summary
-    let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
+    var summary: String? = nil
+    var lastMessage: String? = nil
+    var lastMessageRole: String? = nil  // "user", "assistant", or "tool"
+    var lastToolName: String? = nil  // Tool name if lastMessageRole is "tool"
+    var firstUserMessage: String? = nil  // Fallback title when no summary
+    var lastUserMessageDate: Date? = nil  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
     var lastUserMessage: String? = nil  // Latest user prompt in the current turn
+    var clientName: String? = nil  // "claude", "codex", or "dsh"
+
+    init(
+        summary: String? = nil,
+        lastMessage: String? = nil,
+        lastMessageRole: String? = nil,
+        lastToolName: String? = nil,
+        firstUserMessage: String? = nil,
+        lastUserMessageDate: Date? = nil,
+        usage: UsageInfo = UsageInfo(),
+        lastUserMessage: String? = nil,
+        clientName: String? = nil
+    ) {
+        self.summary = summary
+        self.lastMessage = lastMessage
+        self.lastMessageRole = lastMessageRole
+        self.lastToolName = lastToolName
+        self.firstUserMessage = firstUserMessage
+        self.lastUserMessageDate = lastUserMessageDate
+        self.usage = usage
+        self.lastUserMessage = lastUserMessage
+        self.clientName = clientName
+    }
 }
 
 actor ConversationParser {
@@ -106,15 +129,36 @@ actor ConversationParser {
     func parse(sessionId: String, cwd: String) -> ConversationInfo {
         let fileManager = FileManager.default
         var sessionFile: String?
+        var isDsh = false
+        var isCodex = false
 
-        // 1. Check Claude Code path
-        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let claudePath = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
-        if fileManager.fileExists(atPath: claudePath) {
-            sessionFile = claudePath
-        } else {
-            // 2. Check Codex path (~/.codex/sessions/**/rollout-*<sessionId>.jsonl)
-            sessionFile = findCodexSessionFile(sessionId: sessionId)
+        // Priority 1: DSH format check (DSH sessions always start with "session-" or are in ~/.dsh)
+        if sessionId.hasPrefix("session-") || cwd.contains(".dsh") {
+            if let dshFile = findDshSessionFile(sessionId: sessionId, cwd: cwd) {
+                sessionFile = dshFile
+                isDsh = true
+            }
+        }
+
+        // Priority 2: Claude Code path
+        if sessionFile == nil {
+            let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+            let claudePath = ClaudePaths.projectsDir.path + "/" + projectDir + "/" + sessionId + ".jsonl"
+            if fileManager.fileExists(atPath: claudePath) {
+                sessionFile = claudePath
+            }
+        }
+
+        // Priority 3: DSH general check (if not checked in priority 1)
+        if sessionFile == nil, let dshFile = findDshSessionFile(sessionId: sessionId, cwd: cwd) {
+            sessionFile = dshFile
+            isDsh = true
+        }
+
+        // Priority 4: Codex path (~/.codex/sessions/**/rollout-*<sessionId>.jsonl)
+        if sessionFile == nil, let codexFile = findCodexSessionFile(sessionId: sessionId) {
+            sessionFile = codexFile
+            isCodex = true
         }
 
         guard let resolvedPath = sessionFile,
@@ -127,20 +171,126 @@ actor ConversationParser {
             return cached.info
         }
 
-        guard let data = fileManager.contents(atPath: resolvedPath),
-              let content = String(data: data, encoding: .utf8) else {
+        guard let content = readSessionFileContent(at: resolvedPath) else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        let info: ConversationInfo
-        if resolvedPath.contains(".codex") {
+        var info: ConversationInfo
+        if isDsh || resolvedPath.contains(".dsh") || resolvedPath.hasSuffix(".zstd") {
+            info = parseDshContent(content)
+            info.clientName = "dsh"
+        } else if isCodex || resolvedPath.contains(".codex") {
             info = parseCodexContent(content)
+            info.clientName = "codex"
         } else {
             info = parseContent(content)
+            info.clientName = "claude"
         }
 
         cache[resolvedPath] = CachedInfo(modificationDate: modDate, info: info)
         return info
+    }
+
+    /// Finds the DSH (DeepSeek Harness) session JSONL/zstd file matching sessionId and cwd
+    private func findDshSessionFile(sessionId: String, cwd: String) -> String? {
+        let fileManager = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dshSessionsDir = home + "/.dsh/sessions"
+        guard fileManager.fileExists(atPath: dshSessionsDir) else { return nil }
+
+        let cleanSessionId = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sids = [
+            cleanSessionId,
+            cleanSessionId.hasPrefix("session-") ? cleanSessionId : "session-\(cleanSessionId)",
+            cleanSessionId.replacingOccurrences(of: "session-", with: "")
+        ]
+
+        // 1. Check direct cwd folder if cwd is non-empty
+        if !cwd.isEmpty {
+            let normalizedCwd = cwd.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ".", with: "-")
+            let candidateDirNames = [
+                "--\(normalizedCwd)--",
+                "-\(normalizedCwd)-",
+                normalizedCwd
+            ]
+            for dirName in candidateDirNames {
+                for sid in sids {
+                    let zstdPath = "\(dshSessionsDir)/\(dirName)/\(sid)/session.jsonl.zstd"
+                    if fileManager.fileExists(atPath: zstdPath) {
+                        return zstdPath
+                    }
+                    let jsonlPath = "\(dshSessionsDir)/\(dirName)/\(sid)/session.jsonl"
+                    if fileManager.fileExists(atPath: jsonlPath) {
+                        return jsonlPath
+                    }
+                }
+            }
+        }
+
+        // 2. Search recursively in ~/.dsh/sessions/
+        let enumerator = fileManager.enumerator(
+            at: URL(fileURLWithPath: dshSessionsDir),
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var matchedFile: (path: String, date: Date)?
+        while let fileURL = enumerator?.nextObject() as? URL {
+            let name = fileURL.lastPathComponent
+            let parentName = fileURL.deletingLastPathComponent().lastPathComponent
+            if (name == "session.jsonl.zstd" || name == "session.jsonl") && sids.contains(parentName) {
+                let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                if matchedFile == nil || modDate > matchedFile!.date {
+                    matchedFile = (fileURL.path, modDate)
+                }
+            }
+        }
+        return matchedFile?.path
+    }
+
+    /// Reads session file content, decompressing zstd if necessary
+    private func readSessionFileContent(at path: String) -> String? {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: path) else { return nil }
+
+        if path.hasSuffix(".zstd") {
+            return decompressZstd(at: path)
+        }
+        guard let data = fileManager.contents(atPath: path) else { return nil }
+        if data.count >= 4 && data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD {
+            return decompressZstd(at: path)
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Decompresses a .zstd file using the system zstd command
+    private func decompressZstd(at path: String) -> String? {
+        let zstdCandidates = [
+            "/opt/homebrew/bin/zstd",
+            "/usr/local/bin/zstd",
+            "/usr/bin/zstd"
+        ]
+        let zstdPath = zstdCandidates.first { FileManager.default.fileExists(atPath: $0) } ?? "/opt/homebrew/bin/zstd"
+
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: zstdPath)
+        process.arguments = ["-dc", path]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            // Read data before waitUntilExit to avoid pipe buffer deadlock on large outputs (>64KB)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
+        }
     }
 
     /// Finds the Codex session rollout JSONL file matching sessionId
@@ -169,13 +319,13 @@ actor ConversationParser {
         return matchedFile?.path
     }
 
-    /// Cleans ambient contexts, system instructions, and extracts direct prompt if available
+        /// Cleans ambient contexts, system instructions, and extracts direct prompt if available
     private static func cleanUserPrompt(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return raw }
 
         // 1. If "## My request:" or "## My request for Codex:" exists, extract the content after it
-        if let match = trimmed.range(of: "## My request(?: for Codex)?:\\s*", options: .regularExpression) {
+        if let match = trimmed.range(of: #"## My request(?: for Codex)?:\s*"#, options: .regularExpression) {
             let after = String(trimmed[match.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !after.isEmpty {
                 return after
@@ -185,19 +335,21 @@ actor ConversationParser {
         // 2. Strip XML blocks that Codex prepends (recommended plugins, instructions, environment context, in-app browser)
         var cleaned = trimmed
         let tagPatterns = [
-            "<recommended_plugins>[\\s\\S]*?</recommended_plugins>",
-            "<INSTRUCTIONS>[\\s\\S]*?</INSTRUCTIONS>",
-            "<environment_context>[\\s\\S]*?</environment_context>",
-            "<in-app-browser-context[\\s\\S]*?</in-app-browser-context>",
-            "<app-context>[\\s\\S]*?</app-context>",
-            "<skills_instructions>[\\s\\S]*?</skills_instructions>",
-            "<collaboration_mode>[\\s\\S]*?</collaboration_mode>",
-            "<permissions instructions>[\\s\\S]*?</permissions instructions>"
+            #"<recommended_plugins>[\s\S]*?</recommended_plugins>"#,
+            #"<INSTRUCTIONS>[\s\S]*?</INSTRUCTIONS>"#,
+            #"<environment_context>[\s\S]*?</environment_context>"#,
+            #"<in-app-browser-context[\s\S]*?</in-app-browser-context>"#,
+            #"<app-context>[\s\S]*?</app-context>"#,
+            #"<skills_instructions>[\s\S]*?</skills_instructions>"#,
+            #"<collaboration_mode>[\s\S]*?</collaboration_mode>"#,
+            #"<permissions instructions>[\s\S]*?</permissions instructions>"#,
+            #"<system-reminder>[\s\S]*?</system-reminder>"#,
+            #"<available_skills>[\s\S]*?</available_skills>"#
         ]
         for pattern in tagPatterns {
             cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
         }
-        cleaned = cleaned.replacingOccurrences(of: "# AGENTS\\.md instructions", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: #"# AGENTS\.md instructions"#, with: "", options: .regularExpression)
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? trimmed : cleaned
     }
@@ -265,7 +417,7 @@ actor ConversationParser {
 
     /// Parse Codex JSONL content
     private func parseCodexContent(_ content: String) -> ConversationInfo {
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+        let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
         var firstUserMessage: String?
         var lastUserMessageDate: Date?
@@ -364,7 +516,7 @@ actor ConversationParser {
 
     /// Parse JSONL content
     private func parseContent(_ content: String) -> ConversationInfo {
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+        let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
         var summary: String?
         var lastMessage: String?
@@ -530,6 +682,144 @@ actor ConversationParser {
             }
         }
         return ""
+    }
+
+    /// Parses DSH JSONL content into ConversationInfo
+    private func parseDshContent(_ content: String) -> ConversationInfo {  
+        let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        var summaryTitle: String?
+        var firstUserMessage: String?
+        var lastUserMessageDate: Date?
+        var lastUserMessage: String?
+        var lastMessage: String?
+        var lastMessageRole: String?
+        var lastToolName: String?
+        var usage = UsageInfo()
+
+        // 1. Forward pass: extract session title and first user message
+        for line in lines {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+
+            let type = json["type"] as? String
+
+            if type == "session/title",
+               let data = json["data"] as? [String: Any],
+               let title = data["title"] as? String,
+               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                summaryTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            if firstUserMessage == nil,
+               type == "user/message",
+               let data = json["data"] as? [String: Any] {
+                let source = data["source"] as? [String: Any]
+                let kind = source?["kind"] as? String
+                if kind == "user" || (kind == nil && data["role"] as? String == "user") {
+                    if let userMsg = Self.extractDshUserMessage(from: data) { 
+                        firstUserMessage = Self.truncateMessage(userMsg, maxLength: 80)
+                    }
+                }
+            }
+        }
+
+        // 2. Backward pass: find latest user message and assistant message
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
+
+            let type = json["type"] as? String
+
+            if lastUserMessage == nil,
+               type == "user/message",
+               let data = json["data"] as? [String: Any] {
+                let source = data["source"] as? [String: Any]
+                let kind = source?["kind"] as? String
+                if kind == "user" || (kind == nil && data["role"] as? String == "user") {
+                    if let userMsg = Self.extractDshUserMessage(from: data) {
+                        lastUserMessage = userMsg
+                        if let timeMs = json["time"] as? Double {
+                            lastUserMessageDate = Date(timeIntervalSince1970: timeMs / 1000.0)
+                        } else if let timeMs = json["time"] as? Int {
+                            lastUserMessageDate = Date(timeIntervalSince1970: Double(timeMs) / 1000.0)
+                        }
+                    }
+                }
+            }
+
+            if lastMessage == nil,
+               type == "assistant/message",
+               let data = json["data"] as? [String: Any],
+               let message = data["message"] as? [String: Any],
+               message["role"] as? String == "assistant" {
+                if let contentArray = message["content"] as? [[String: Any]] {
+                    var textParts: [String] = []
+                    for block in contentArray {
+                        if block["type"] as? String == "text",
+                           let text = block["text"] as? String,
+                           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            textParts.append(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                        }
+                    }
+                    if !textParts.isEmpty {
+                        lastMessage = textParts.joined(separator: "\n\n")
+                        lastMessageRole = "assistant"
+                    }
+                }
+            }
+
+            if type == "assistant/message",
+               let data = json["data"] as? [String: Any],
+               let usageObj = data["usage"] as? [String: Any] {
+                let input = usageObj["inputTokens"] as? Int ?? 0
+                let output = usageObj["outputTokens"] as? Int ?? 0
+                let cacheRead = usageObj["cacheReadTokens"] as? Int ?? 0
+                let cacheCreation = usageObj["cacheWriteTokens"] as? Int ?? 0
+                usage.inputTokens += input
+                usage.outputTokens += output
+                usage.cacheReadTokens += cacheRead
+                usage.cacheCreationTokens += cacheCreation
+            }
+        }
+
+        let effectiveSummary = summaryTitle ?? firstUserMessage
+
+        var info = ConversationInfo(
+            summary: effectiveSummary,
+            lastMessage: lastMessage,
+            lastMessageRole: lastMessageRole,
+            lastToolName: lastToolName,
+            firstUserMessage: firstUserMessage,
+            lastUserMessageDate: lastUserMessageDate,
+            usage: usage,
+            lastUserMessage: lastUserMessage
+        )
+        info.clientName = "dsh"
+        return info
+    }
+
+    /// Extracts direct user message text from DSH user/message data payload
+    private static func extractDshUserMessage(from data: [String: Any]) -> String? {
+        if let contentArray = data["content"] as? [[String: Any]] {
+            let texts = contentArray.compactMap { block -> String? in
+                guard block["type"] as? String == "text",
+                      let text = block["text"] as? String,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return nil
+                }
+                return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !texts.isEmpty {
+                let joined = texts.joined(separator: "\n")
+                return cleanUserPrompt(joined)
+            }
+        }
+        return nil
     }
 
     /// Truncate message for display
@@ -1274,8 +1564,10 @@ actor ConversationParser {
     }
 
 #if DEBUG
-    func parseContentForTesting(_ content: String, isCodex: Bool) -> ConversationInfo {
-        if isCodex {
+    func parseContentForTesting(_ content: String, isCodex: Bool = false, isDsh: Bool = false) -> ConversationInfo {
+        if isDsh {
+            return parseDshContent(content)
+        } else if isCodex {
             return parseCodexContent(content)
         } else {
             return parseContent(content)
@@ -1375,7 +1667,4 @@ extension ConversationParser {
         return tools
     }
 }
-
-
-
 

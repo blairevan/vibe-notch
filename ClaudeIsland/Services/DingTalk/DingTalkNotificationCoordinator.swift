@@ -18,6 +18,8 @@ final class DingTalkNotificationCoordinator {
     private var hasSeededSnapshot = false
     private var previousPhases: [String: PhaseMarker] = [:]
     private var notifiedPermissionIds: [String: Set<String>] = [:]
+    /// Serializes concurrent processSnapshot calls — only one runs at a time, in order.
+    private var processingTask: Task<Void, Never>?
 
     /// Creates a coordinator with injectable state and transport dependencies.
     init(
@@ -46,8 +48,13 @@ final class DingTalkNotificationCoordinator {
         subscription = SessionStore.shared.sessionsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
-                Task { @MainActor in
-                    await self?.processSnapshot(sessions)
+                guard let self else { return }
+                // Chain new snapshot onto the previous task to guarantee serial execution.
+                // Without this, multiple concurrent Tasks could race on previousPhases.
+                let previous = self.processingTask
+                self.processingTask = Task { @MainActor in
+                    _ = await previous?.value
+                    await self.processSnapshot(sessions)
                 }
             }
     }
@@ -56,6 +63,8 @@ final class DingTalkNotificationCoordinator {
     func stop() {
         subscription?.cancel()
         subscription = nil
+        processingTask?.cancel()
+        processingTask = nil
         hasSeededSnapshot = false
         previousPhases.removeAll()
         notifiedPermissionIds.removeAll()
@@ -75,9 +84,17 @@ final class DingTalkNotificationCoordinator {
             let currentPhase = PhaseMarker(session.phase)
             let previousPhase = previousPhases[session.sessionId]
 
-            if let previousPhase,
-               currentPhase == .waitingForInput,
-               previousPhase != .waitingForInput {
+            Self.logger.info("[DingTalk Debug] session=\(session.sessionId.prefix(8), privacy: .public) currentPhase=\(String(describing: currentPhase), privacy: .public) previousPhase=\(String(describing: previousPhase), privacy: .public)")
+
+            let isCompletion = (previousPhase != nil && currentPhase == .waitingForInput && previousPhase != .waitingForInput)
+
+            let logLine = "[\(getpid())] [coordinator] eval session=\(session.sessionId.prefix(8)) cur=\(currentPhase) prev=\(String(describing: previousPhase)) isCompletion=\(isCompletion)\n"
+            if let d = logLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            }
+
+            if isCompletion {
+                Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
                 messages.append(taskCompletedMessage(for: session))
             }
 
@@ -117,6 +134,12 @@ final class DingTalkNotificationCoordinator {
     /// Sends generated messages when enabled credentials are available.
     private func sendMessagesIfConfigured(_ messages: [DingTalkMessage]) async {
         guard !messages.isEmpty, isEnabled() else { return }
+        Self.logger.info("[DingTalk Debug] sendMessagesIfConfigured: \(messages.count) messages, isEnabled=\(self.isEnabled(), privacy: .public)")
+
+        let logLine = "[\(getpid())] [coordinator] sending \(messages.count) DingTalk messages\n"
+        if let d = logLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+            fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+        }
 
         let credentials: DingTalkCredentials
         do {
@@ -203,8 +226,18 @@ final class DingTalkNotificationCoordinator {
         return formatter.string(from: now())
     }
 
-    /// Extracts the session subject/summary with fallbacks, checking SQLite thread title first.
+    /// Extracts the session subject/summary with fallbacks, checking DSH and Codex SQLite thread title first.
     private func extractSubject(from session: SessionState) -> String {
+        if session.conversationInfo.clientName == "dsh" || session.cwd.contains(".dsh") {
+            if let summary = session.conversationInfo.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return safeValue(summary, fallback: "未命名会话")
+            }
+            if let firstUser = session.conversationInfo.firstUserMessage, !firstUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return safeValue(firstUser, fallback: "未命名会话")
+            }
+            return "未命名会话"
+        }
+
         if let dbTitle = fetchCodexThreadTitle(sessionId: session.sessionId), !dbTitle.isEmpty {
             return safeValue(dbTitle, fallback: "未命名会话")
         }
@@ -231,8 +264,9 @@ final class DingTalkNotificationCoordinator {
 
         do {
             try process.run()
-            process.waitUntilExit()
+            // Read data before waitUntilExit to avoid pipe buffer deadlock
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
             if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !output.isEmpty {
                 return output
@@ -294,6 +328,26 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts terminal identifier and PID with friendly GUI name.
     private func extractTerminalInfo(from session: SessionState) -> String {
+        let clientName = session.conversationInfo.clientName
+
+        // 1. Explicit DSH client types
+        if clientName == "dsh-web" {
+            if let pid = session.pid {
+                return "DSH Web (PID: \(pid))"
+            } else {
+                return "DSH Web"
+            }
+        }
+
+        if clientName == "dsh-desktop" {
+            if let pid = session.pid {
+                return "DSH Desktop (PID: \(pid))"
+            } else {
+                return "DSH Desktop"
+            }
+        }
+
+        // 2. Real terminal TTY (if active interactive terminal)
         let tty = session.tty
         if let tty = tty, !tty.isEmpty {
             if let pid = session.pid {
@@ -302,11 +356,53 @@ final class DingTalkNotificationCoordinator {
             return tty
         }
 
-        // GUI process / Desktop app fallback
+        // 3. DSH general fallback: inspect running process command if available
+        if clientName == "dsh" || session.cwd.contains(".dsh") {
+            if let pid = session.pid {
+                let cmd = fetchProcessCommand(pid: pid) ?? ""
+                if cmd.contains("DeepSeek Harness Desktop") {
+                    return "DSH Desktop (PID: \(pid))"
+                } else if cmd.contains("dsh web") || cmd.contains("dsh-web") {
+                    return "DSH Web (PID: \(pid))"
+                }
+                return "DSH Desktop (PID: \(pid))"
+            } else {
+                return "DSH Desktop"
+            }
+        }
+
+        if clientName == "claude" {
+            if let pid = session.pid {
+                return "Claude Code (PID: \(pid))"
+            } else {
+                return "Claude Code"
+            }
+        }
+
+        // GUI process / Desktop app fallback (defaults to Codex Desktop)
         if let pid = session.pid {
             return "Codex Desktop (PID: \(pid))"
         } else {
             return "Codex Desktop"
+        }
+    }
+
+    /// Helper to fetch command line for a PID to differentiate GUI from CLI web servers
+    private func fetchProcessCommand(pid: Int) -> String? {
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "command="]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return nil
         }
     }
 
@@ -348,8 +444,3 @@ private enum PhaseMarker: Equatable {
         }
     }
 }
-
-
-
-
-

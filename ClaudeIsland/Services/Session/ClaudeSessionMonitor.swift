@@ -12,6 +12,8 @@ import Foundation
 
 @MainActor
 class ClaudeSessionMonitor: ObservableObject {
+    static let shared = ClaudeSessionMonitor()
+
     @Published var instances: [SessionState] = []
     @Published var pendingInstances: [SessionState] = []
 

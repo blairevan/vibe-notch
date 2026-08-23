@@ -29,6 +29,7 @@ struct HookInstaller {
         }
 
         updateSettings(at: ClaudePaths.settingsFile)
+        installDshPluginIfNeeded()
     }
 
     private static func updateSettings(at settingsURL: URL) {
@@ -316,5 +317,216 @@ struct HookInstaller {
     nonisolated private static func isClaudeIslandHook(_ hook: [String: Any]) -> Bool {
         let cmd = hook["command"] as? String ?? ""
         return cmd.contains("claude-island-state.py")
+    }
+    /// Installs DSH (DeepSeek Harness) notification plugin into ~/.dsh/plugins/dsh-vibe-notch and registers it in profile
+    static func installDshPluginIfNeeded() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let dshDir = home + "/.dsh"
+        guard fm.fileExists(atPath: dshDir) else { return }
+
+        let pluginDir = dshDir + "/plugins/dsh-vibe-notch"
+        let libDir = pluginDir + "/lib"
+        try? fm.createDirectory(atPath: libDir, withIntermediateDirectories: true)
+
+        let pkgJsonPath = pluginDir + "/package.json"
+        let cordisPatchPath = pluginDir + "/cordis.patch.yml"
+        let indexPath = libDir + "/index.js"
+
+        let pkgJsonContent = """
+{
+  "name": "dsh-vibe-notch",
+  "description": "Vibe Notch integration plugin for DeepSeek Harness",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
+"""
+
+        let cordisPatchContent = """
+- insert:
+    - id: vibe-notch
+      name: 'dsh-vibe-notch'
+"""
+
+        let indexJsContent = """
+import net from 'node:net';
+import fs from 'node:fs';
+
+const SOCKET_PATH = '/tmp/claude-island.sock';
+const LOG_PATH = '/tmp/vibe-notch-flow.log';
+
+function log(msg) {
+  try {
+    fs.appendFileSync(LOG_PATH, '[' + process.pid + '] [dsh-plugin] ' + msg + '\\n');
+  } catch {}
+}
+
+const isDesktop = process.execPath.includes('DeepSeek Harness Desktop') ||
+                  process.argv.some(arg => typeof arg === 'string' && arg.includes('DeepSeek Harness Desktop')) ||
+                  Boolean(process.env.DSH_DESKTOP);
+
+const dshClientType = isDesktop ? 'dsh-desktop' : 'dsh-web';
+
+log('dsh-vibe-notch plugin loaded, clientType=' + dshClientType);
+
+function sendEvent(payload) {
+  const fullPayload = {
+    ...payload,
+    client: dshClientType
+  };
+  log('sendEvent connecting: event=' + fullPayload.event + ', status=' + fullPayload.status + ', client=' + fullPayload.client);
+  try {
+    const client = net.createConnection(SOCKET_PATH, () => {
+      client.write(JSON.stringify(fullPayload), () => {
+        client.end();
+        log('sendEvent success for ' + fullPayload.event);
+      });
+    });
+    client.on('error', (err) => {
+      log('sendEvent socket error: ' + err.message);
+    });
+  } catch (err) {
+    log('sendEvent exception: ' + err.message);
+  }
+}
+
+export function apply(ctx) {
+  log('dsh-vibe-notch apply(ctx) registered, clientType=' + dshClientType);
+
+  ctx.on('session/created', (session) => {
+    log('session/created: ' + (session.id || '').slice(0, 8));
+    sendEvent({
+      session_id: session.id,
+      cwd: session.header?.cwd || process.cwd(),
+      event: 'SessionStart',
+      status: 'waiting_for_input',
+      pid: process.pid
+    });
+  }, { global: true });
+
+  ctx.on('session/event', (session, event) => {
+    const cwd = session.header?.cwd || process.cwd();
+    const sessionId = session.id;
+    log('session/event: type=' + event.type + ', sid=' + (sessionId || '').slice(0, 8));
+
+    if (event.type === 'turn/start') {
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'UserPromptSubmit',
+        status: 'processing',
+        pid: process.pid
+      });
+    } else if (event.type === 'tool/call') {
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'PreToolUse',
+        status: 'running_tool',
+        tool_name: event.data?.tool || 'unknown',
+        tool_use_id: event.data?.callId,
+        tool_input: event.data?.input,
+        pid: process.pid
+      });
+    } else if (event.type === 'tool/result') {
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'PostToolUse',
+        status: 'processing',
+        tool_use_id: event.data?.callId,
+        pid: process.pid
+      });
+    } else if (event.type === 'approval/asked') {
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'PermissionRequest',
+        status: 'waiting_for_approval',
+        tool_name: event.data?.toolName || 'tool',
+        tool_use_id: event.data?.id || event.data?.callId,
+        pid: process.pid
+      });
+    } else if (event.type === 'turn/end') {
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'Stop',
+        status: 'waiting_for_input',
+        pid: process.pid
+      });
+    }
+  }, { global: true });
+
+  ctx.on('session/disposed', (session) => {
+    log('session/disposed: ' + (session.id || '').slice(0, 8));
+    sendEvent({
+      session_id: session.id,
+      cwd: session.header?.cwd || process.cwd(),
+      event: 'SessionEnd',
+      status: 'ended',
+      pid: process.pid
+    });
+  }, { global: true });
+}
+"""
+
+        try? pkgJsonContent.write(toFile: pkgJsonPath, atomically: true, encoding: .utf8)
+        try? cordisPatchContent.write(toFile: cordisPatchPath, atomically: true, encoding: .utf8)
+        try? indexJsContent.write(toFile: indexPath, atomically: true, encoding: .utf8)
+
+        // Ensure symlinks exist in node_modules
+        let webNodeModules = dshDir + "/profiles/web/node_modules"
+        if fm.fileExists(atPath: webNodeModules) {
+            let symlinkPath = webNodeModules + "/dsh-vibe-notch"
+            try? fm.removeItem(atPath: symlinkPath)
+            try? fm.createSymbolicLink(atPath: symlinkPath, withDestinationPath: "../../../plugins/dsh-vibe-notch")
+        }
+
+        let profilesNodeModules = dshDir + "/profiles/node_modules"
+        if fm.fileExists(atPath: profilesNodeModules) {
+            let symlinkPath = profilesNodeModules + "/dsh-vibe-notch"
+            try? fm.removeItem(atPath: symlinkPath)
+            try? fm.createSymbolicLink(atPath: symlinkPath, withDestinationPath: "../plugins/dsh-vibe-notch")
+        }
+
+        let profilePath = dshDir + "/profiles/web/package.json"
+        guard fm.fileExists(atPath: profilePath),
+              let profileData = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
+              var profileJson = (try? JSONSerialization.jsonObject(with: profileData)) as? [String: Any] else {
+            return
+        }
+
+        var deps = profileJson["dependencies"] as? [String: Any] ?? [:]
+        var dshObj = profileJson["dsh"] as? [String: Any] ?? [:]
+        var profileObj = dshObj["profile"] as? [String: Any] ?? [:]
+        var bundles = profileObj["bundles"] as? [String] ?? []
+
+        var modified = false
+        if deps["dsh-vibe-notch"] == nil && deps["@omdsh-dev/dsh-vibe-notch"] == nil {
+            deps["dsh-vibe-notch"] = "link:" + pluginDir
+            profileJson["dependencies"] = deps
+            modified = true
+        }
+
+        if !bundles.contains("dsh-vibe-notch") && !bundles.contains("@omdsh-dev/dsh-vibe-notch") {
+            bundles.append("dsh-vibe-notch")
+            profileObj["bundles"] = bundles
+            dshObj["profile"] = profileObj
+            profileJson["dsh"] = dshObj
+            modified = true
+        }
+
+        if modified,
+           let updatedData = try? JSONSerialization.data(withJSONObject: profileJson, options: [.prettyPrinted, .sortedKeys]) {
+            try? updatedData.write(to: URL(fileURLWithPath: profilePath))
+        }
     }
 }

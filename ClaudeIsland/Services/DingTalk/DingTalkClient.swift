@@ -90,11 +90,24 @@ final class DingTalkClient {
         do {
             result = try JSONDecoder().decode(DingTalkAPIResponse.self, from: data)
         } catch {
+            let errLine = "[\(getpid())] [dingtalk-client] FAILED to decode response: \(String(data: data, encoding: .utf8) ?? "")\n"
+            if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            }
             throw DingTalkClientError.invalidPayload
         }
 
         guard result.errcode == 0 else {
+            let errLine = "[\(getpid())] [dingtalk-client] BUSINESS ERROR: code=\(result.errcode), msg=\(result.errmsg)\n"
+            if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            }
             throw DingTalkClientError.business(code: result.errcode, message: result.errmsg)
+        }
+
+        let successLine = "[\(getpid())] [dingtalk-client] DingTalk HTTP SUCCESS: \(message.title)\n"
+        if let d = successLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
+            fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
         }
     }
 

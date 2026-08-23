@@ -1,0 +1,13 @@
+{
+  "name": "dsh-vibe-notch",
+  "description": "Vibe Notch integration plugin for DeepSeek Harness",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
