@@ -187,10 +187,13 @@ actor SessionStore {
             convInfo.clientName = "dsh"
         }
 
+        let rawName = URL(fileURLWithPath: event.cwd).lastPathComponent
+        let projectName = (rawName.isEmpty || rawName == "/") ? (event.cwd.isEmpty ? "Unknown" : "Default") : rawName
+
         return SessionState(
             sessionId: event.sessionId,
             cwd: event.cwd,
-            projectName: URL(fileURLWithPath: event.cwd).lastPathComponent,
+            projectName: projectName,
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
             isInTmux: false,  // Will be updated

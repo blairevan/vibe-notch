@@ -86,7 +86,19 @@ final class DingTalkNotificationCoordinator {
 
             Self.logger.info("[DingTalk Debug] session=\(session.sessionId.prefix(8), privacy: .public) currentPhase=\(String(describing: currentPhase), privacy: .public) previousPhase=\(String(describing: previousPhase), privacy: .public)")
 
-            let isCompletion = (previousPhase != nil && currentPhase == .waitingForInput && previousPhase != .waitingForInput)
+            let isCompletion: Bool
+            switch (previousPhase, currentPhase) {
+            case (.processing, .waitingForInput),
+                 (.compacting, .waitingForInput),
+                 (.waitingForApproval, .waitingForInput):
+                // Only notify if the session actually contains a user prompt or conversation content
+                let hasUserContent = session.conversationInfo.lastUserMessage != nil ||
+                                     session.conversationInfo.firstUserMessage != nil ||
+                                     session.conversationInfo.lastMessage != nil
+                isCompletion = hasUserContent
+            default:
+                isCompletion = false
+            }
 
             let logLine = "[\(getpid())] [coordinator] eval session=\(session.sessionId.prefix(8)) cur=\(currentPhase) prev=\(String(describing: previousPhase)) isCompletion=\(isCompletion)\n"
             if let d = logLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
@@ -161,7 +173,8 @@ final class DingTalkNotificationCoordinator {
 
     /// Creates a task-completed message containing rich and safe session metadata.
     private func taskCompletedMessage(for session: SessionState) -> DingTalkMessage {
-        let projectName = safeValue(session.projectName, fallback: "Unknown")
+        let rawProject = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectName = (rawProject.isEmpty || rawProject == "/") ? "Default" : safeValue(rawProject, fallback: "Default")
         let subject = extractSubject(from: session)
         let prompt = extractLastUserPrompt(from: session)
         let result = extractResult(from: session)
@@ -195,7 +208,8 @@ final class DingTalkNotificationCoordinator {
 
     /// Creates a permission message without including tool input or full paths.
     private func permissionMessage(for session: SessionState) -> DingTalkMessage {
-        let projectName = safeValue(session.projectName, fallback: "Unknown")
+        let rawProject = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectName = (rawProject.isEmpty || rawProject == "/") ? "Default" : safeValue(rawProject, fallback: "Default")
         let toolName = safeValue(session.pendingToolName ?? "Unknown", fallback: "Unknown")
         let terminalInfo = extractTerminalInfo(from: session)
         let timeString = formattedTime()

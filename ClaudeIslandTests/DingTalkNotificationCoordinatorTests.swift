@@ -83,6 +83,40 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(recorder.messages.isEmpty)
     }
 
+    /// Verifies session initialization (idle to waitingForInput) does not trigger task completion.
+    func testIdleToWaitingForInputDoesNotNotify() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        await coordinator.processSnapshot([])
+        await coordinator.processSnapshot([makeSession(phase: .idle)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+
+        XCTAssertTrue(recorder.messages.isEmpty)
+    }
+
+    /// Verifies empty session without user prompts does not trigger notification even on processing to waitingForInput.
+    func testEmptySessionWithoutUserPromptDoesNotNotify() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        let emptySessionProcessing = SessionState(
+            sessionId: "empty-session",
+            cwd: "/",
+            projectName: "/",
+            phase: .processing,
+            conversationInfo: ConversationInfo()
+        )
+        var emptySessionWaiting = emptySessionProcessing
+        emptySessionWaiting.phase = .waitingForInput
+
+        await coordinator.processSnapshot([])
+        await coordinator.processSnapshot([emptySessionProcessing])
+        await coordinator.processSnapshot([emptySessionWaiting])
+
+        XCTAssertTrue(recorder.messages.isEmpty)
+    }
+
     /// Verifies messages include rich safe context and blockquoted summaries.
     func testMessageContainsProjectNameAndRichFields() async {
         let recorder = MessageRecorder()
@@ -412,7 +446,14 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
             sessionId: "session-1",
             cwd: "/Users/private/vibe-notch",
             projectName: "vibe-notch",
-            phase: phase
+            phase: phase,
+            conversationInfo: ConversationInfo(
+                summary: "任务测试",
+                lastMessage: "测试完成",
+                lastMessageRole: "assistant",
+                firstUserMessage: "测试指令",
+                lastUserMessage: "测试指令"
+            )
         )
     }
 
@@ -457,7 +498,6 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-
 
 
 
