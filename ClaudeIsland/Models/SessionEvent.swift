@@ -135,10 +135,10 @@ extension HookEvent {
         }
 
         // Permission request creates waitingForApproval state
-        if expectsResponse, let tool = tool {
+        if status == "waiting_for_approval" || expectsResponse || event == "PermissionRequest" {
             return .waitingForApproval(PermissionContext(
                 toolUseId: toolUseId ?? "",
-                toolName: tool,
+                toolName: tool ?? "tool",
                 toolInput: toolInput,
                 receivedAt: Date()
             ))

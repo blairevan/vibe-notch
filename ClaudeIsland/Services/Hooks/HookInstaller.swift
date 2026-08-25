@@ -381,7 +381,7 @@ function sendEvent(payload) {
     ...payload,
     client: dshClientType
   };
-  log('sendEvent connecting: event=' + fullPayload.event + ', status=' + fullPayload.status + ', client=' + fullPayload.client);
+  log('sendEvent connecting: event=' + fullPayload.event + ', status=' + fullPayload.status + ', client=' + fullPayload.client + ', tool=' + (fullPayload.tool || 'none'));
   try {
     const client = net.createConnection(SOCKET_PATH, () => {
       client.write(JSON.stringify(fullPayload), () => {
@@ -395,6 +395,22 @@ function sendEvent(payload) {
   } catch (err) {
     log('sendEvent exception: ' + err.message);
   }
+}
+
+// Track pending/recent tool calls by sessionId
+const activeToolCalls = new Map();
+
+function parseToolArguments(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+    return { command: raw };
+  }
+  return {};
 }
 
 export function apply(ctx) {
@@ -417,6 +433,7 @@ export function apply(ctx) {
     log('session/event: type=' + event.type + ', sid=' + (sessionId || '').slice(0, 8));
 
     if (event.type === 'turn/start') {
+      activeToolCalls.delete(sessionId);
       sendEvent({
         session_id: sessionId,
         cwd,
@@ -425,36 +442,78 @@ export function apply(ctx) {
         pid: process.pid
       });
     } else if (event.type === 'tool/call') {
+      const toolName = event.data?.name || event.data?.tool || 'unknown';
+      const callId = event.data?.callId || ('call-' + Date.now());
+      const toolInput = parseToolArguments(event.data?.arguments || event.data?.input);
+
+      activeToolCalls.set(sessionId, {
+        toolName,
+        callId,
+        toolInput
+      });
+
       sendEvent({
         session_id: sessionId,
         cwd,
         event: 'PreToolUse',
         status: 'running_tool',
-        tool_name: event.data?.tool || 'unknown',
-        tool_use_id: event.data?.callId,
-        tool_input: event.data?.input,
+        tool: toolName,
+        tool_name: toolName,
+        tool_use_id: callId,
+        tool_input: toolInput,
         pid: process.pid
       });
     } else if (event.type === 'tool/result') {
+      const callId = event.data?.callId || activeToolCalls.get(sessionId)?.callId;
       sendEvent({
         session_id: sessionId,
         cwd,
         event: 'PostToolUse',
         status: 'processing',
-        tool_use_id: event.data?.callId,
+        tool_use_id: callId,
         pid: process.pid
       });
     } else if (event.type === 'approval/asked') {
+      const lastCall = activeToolCalls.get(sessionId);
+      const toolName = event.data?.toolName || lastCall?.toolName || 'tool';
+      const approvalId = event.data?.id || event.data?.callId || lastCall?.callId || ('approval-' + Date.now());
+      const reason = event.data?.reason || '';
+      
+      const combinedInput = {
+        ...(lastCall?.toolInput || {}),
+        ...(reason ? { reason } : {})
+      };
+
+      log('approval/asked: tool=' + toolName + ', reason=' + reason + ', id=' + approvalId);
+
       sendEvent({
         session_id: sessionId,
         cwd,
         event: 'PermissionRequest',
         status: 'waiting_for_approval',
-        tool_name: event.data?.toolName || 'tool',
-        tool_use_id: event.data?.id || event.data?.callId,
+        tool: toolName,
+        tool_name: toolName,
+        tool_use_id: approvalId,
+        tool_input: combinedInput,
+        reason: reason,
+        message: reason,
+        pid: process.pid
+      });
+    } else if (event.type === 'approval/decided') {
+      const approvalId = event.data?.id;
+      const outcome = event.data?.outcome;
+      log('approval/decided: outcome=' + outcome + ', id=' + approvalId);
+
+      sendEvent({
+        session_id: sessionId,
+        cwd,
+        event: 'PostToolUse',
+        status: 'processing',
+        tool_use_id: approvalId,
         pid: process.pid
       });
     } else if (event.type === 'turn/end') {
+      activeToolCalls.delete(sessionId);
       sendEvent({
         session_id: sessionId,
         cwd,
@@ -466,6 +525,7 @@ export function apply(ctx) {
   }, { global: true });
 
   ctx.on('session/disposed', (session) => {
+    activeToolCalls.delete(session.id);
     log('session/disposed: ' + (session.id || '').slice(0, 8));
     sendEvent({
       session_id: session.id,

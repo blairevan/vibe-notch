@@ -30,10 +30,11 @@ struct HookEvent: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case cwd, event, status, pid, tty, tool, client
+        case toolName = "tool_name"
         case toolInput = "tool_input"
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
-        case message
+        case message, reason
     }
 
     /// Create a copy with updated toolUseId
@@ -50,6 +51,55 @@ struct HookEvent: Codable, Sendable {
         self.notificationType = notificationType
         self.message = message
         self.client = client
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        event = try container.decodeIfPresent(String.self, forKey: .event) ?? ""
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? ""
+        pid = try container.decodeIfPresent(Int.self, forKey: .pid)
+        tty = try container.decodeIfPresent(String.self, forKey: .tty)
+
+        let rawTool = try container.decodeIfPresent(String.self, forKey: .tool)
+        let rawToolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        tool = rawTool ?? rawToolName
+
+        let rawInput = try container.decodeIfPresent([String: AnyCodable].self, forKey: .toolInput)
+        let reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        if let rawInput = rawInput {
+            var input = rawInput
+            if let reason = reason, input["reason"] == nil {
+                input["reason"] = AnyCodable(reason)
+            }
+            toolInput = input
+        } else if let reason = reason {
+            toolInput = ["reason": AnyCodable(reason)]
+        } else {
+            toolInput = nil
+        }
+
+        toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+        notificationType = try container.decodeIfPresent(String.self, forKey: .notificationType)
+        message = try container.decodeIfPresent(String.self, forKey: .message) ?? reason
+        client = try container.decodeIfPresent(String.self, forKey: .client)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionId, forKey: .sessionId)
+        try container.encode(cwd, forKey: .cwd)
+        try container.encode(event, forKey: .event)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(pid, forKey: .pid)
+        try container.encodeIfPresent(tty, forKey: .tty)
+        try container.encodeIfPresent(tool, forKey: .tool)
+        try container.encodeIfPresent(toolInput, forKey: .toolInput)
+        try container.encodeIfPresent(toolUseId, forKey: .toolUseId)
+        try container.encodeIfPresent(notificationType, forKey: .notificationType)
+        try container.encodeIfPresent(message, forKey: .message)
+        try container.encodeIfPresent(client, forKey: .client)
     }
 
     var sessionPhase: SessionPhase {

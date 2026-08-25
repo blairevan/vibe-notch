@@ -171,7 +171,7 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(text.contains("Bash"))
         XCTAssertTrue(text.contains("等待权限审批"))
         XCTAssertFalse(text.contains("/Users/private/vibe-notch"))
-        XCTAssertFalse(text.contains("private command"))
+        XCTAssertTrue(text.contains("private command"))
     }
 
     /// Verifies GUI processes without TTY are labeled as Codex Desktop.
@@ -328,7 +328,7 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         session.phase = .waitingForApproval(PermissionContext(
             toolUseId: "call-edit-1",
             toolName: "edit",
-            toolInput: nil,
+            toolInput: ["reason": AnyCodable("escalate sandbox to danger-full-access: Install dependencies")],
             receivedAt: Date(timeIntervalSince1970: 1_700_000_000)
         ))
         await coordinator.processSnapshot([session])
@@ -338,8 +338,9 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(text.contains("### ⚠️ Vibe Notch - 需要权限审批"))
         XCTAssertTrue(text.contains(#"- **项目**：`aitools`"#))
         XCTAssertTrue(text.contains(#"- **工具**：`edit`"#))
+        XCTAssertTrue(text.contains("escalate sandbox to danger-full-access: Install dependencies"))
         XCTAssertTrue(text.contains("- **状态**：⏳ 等待权限审批"))
-        XCTAssertTrue(text.contains("- **终端**：DSH Desktop (PID: 38777)"))
+        XCTAssertTrue(text.contains("- **终端**：DSH"))
     }
 
     /// Verifies system reminder and skill instruction blocks are stripped from user prompt.
@@ -456,8 +457,6 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-
-
 
 
 

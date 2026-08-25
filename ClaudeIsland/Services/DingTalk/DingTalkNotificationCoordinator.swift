@@ -207,7 +207,7 @@ final class DingTalkNotificationCoordinator {
 
             **待审批操作**
             - **项目**：`\(projectName)`
-            - **工具**：`\(toolName)`
+            - **工具**：`\(toolName)`\(session.pendingToolInput.map { "\n- **详情**：`" + safeValue($0, fallback: "") + "`" } ?? "")
             - **状态**：⏳ 等待权限审批
 
             **环境与时间**

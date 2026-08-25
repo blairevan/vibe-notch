@@ -19,33 +19,43 @@ struct PermissionContext: Sendable {
     var formattedInput: String? {
         guard let input = toolInput else { return nil }
 
-        // For Bash, prioritize showing the command
-        if toolName == "Bash", let command = input["command"]?.value as? String {
-            return command.count > 100 ? String(command.prefix(100)) + "..." : command
+        // For command execution tools (Bash, exec, exec_command, sh, terminal, bash)
+        let execToolNames = ["Bash", "exec", "exec_command", "sh", "terminal", "bash"]
+        if execToolNames.contains(toolName) {
+            if let command = (input["command"]?.value as? String ?? input["cmd"]?.value as? String), !command.isEmpty {
+                return command.count > 150 ? String(command.prefix(150)) + "..." : command
+            }
+        }
+
+        // Check if there is an explicit reason (e.g. DSH/Codex permission escalation justification)
+        if let reason = input["reason"]?.value as? String, !reason.isEmpty {
+            return reason.count > 150 ? String(reason.prefix(150)) + "..." : reason
         }
 
         // For Write/Edit, show the file path
-        if toolName == "Write" || toolName == "Edit", let path = input["file_path"]?.value as? String {
+        if toolName == "Write" || toolName == "Edit" || toolName == "write" || toolName == "edit",
+           let path = (input["file_path"]?.value as? String ?? input["path"]?.value as? String) {
             return URL(fileURLWithPath: path).lastPathComponent
         }
 
         // For Read, show the file path
-        if toolName == "Read", let path = input["file_path"]?.value as? String {
+        if toolName == "Read" || toolName == "read",
+           let path = (input["file_path"]?.value as? String ?? input["path"]?.value as? String) {
             return URL(fileURLWithPath: path).lastPathComponent
         }
 
-        // Default: show first string value found (skip description)
-        let priorityKeys = ["command", "file_path", "path", "query", "pattern", "url"]
+        // Priority string keys
+        let priorityKeys = ["command", "cmd", "reason", "justification", "file_path", "path", "query", "pattern", "url", "description"]
         for key in priorityKeys {
-            if let value = input[key]?.value as? String {
-                return value.count > 100 ? String(value.prefix(100)) + "..." : value
+            if let value = input[key]?.value as? String, !value.isEmpty {
+                return value.count > 150 ? String(value.prefix(150)) + "..." : value
             }
         }
 
-        // Fallback: first non-description string
-        for (key, value) in input where key != "description" {
-            if let str = value.value as? String {
-                return str.count > 100 ? String(str.prefix(100)) + "..." : str
+        // Fallback: first non-empty string value
+        for (_, value) in input {
+            if let str = value.value as? String, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return str.count > 150 ? String(str.prefix(150)) + "..." : str
             }
         }
 
