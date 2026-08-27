@@ -117,6 +117,28 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(recorder.messages.isEmpty)
     }
 
+    /// Verifies the first waiting state after context compaction is an internal
+    /// recovery boundary and does not notify with the pre-compaction response.
+    func testContextCompactionDoesNotNotifyIntermediateWaitingState() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .compacting)])
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+
+        XCTAssertTrue(recorder.messages.isEmpty)
+
+        var finalSession = makeSession(phase: .processing)
+        finalSession.conversationInfo.lastMessage = "压缩后生成的最终结果"
+        await coordinator.processSnapshot([finalSession])
+        finalSession.phase = .waitingForInput
+        await coordinator.processSnapshot([finalSession])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+    }
+
     /// Verifies messages include rich safe context and blockquoted summaries.
     func testMessageContainsProjectNameAndRichFields() async {
         let recorder = MessageRecorder()
@@ -498,7 +520,5 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-
-
 
 

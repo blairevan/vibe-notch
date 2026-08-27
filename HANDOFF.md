@@ -102,6 +102,20 @@
 
 ---
 
+## 2.5 2026-08-27 上下文压缩误触发完成通知修复
+
+### 根因
+
+Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> processing -> waitingForInput` 的恢复时序。原有协调器只根据 `processing -> waitingForInput` 判断任务完成，导致压缩前的中间助手回复被误认为最终结果并发送钉钉通知。
+
+### 修复与验证
+
+- `DingTalkNotificationCoordinator.swift`：在进入 `compacting` 时记录会话结果指纹（最新用户消息、最新助手消息及角色）；压缩恢复后的等待状态若仍是同一条旧回复则抑制通知，若结果已更新则正常通知。
+- `DingTalkNotificationCoordinatorTests.swift`：新增回归测试，覆盖压缩中间状态不通知、最终结果变化后正常通知。
+- 全量单元测试：35 个测试通过，0 failure。
+- Release 构建通过，并已部署到 `/Applications/Vibe Notch.app` 后重启验证。
+- 测试使用独立的 SwiftPM checkout/cache；系统原有 Sparkle checkout 存在损坏对象，未修改项目依赖清单。
+
 ## 6. 修订记录
 
 | 修订时间 | 修订人 | 修订小结 |
@@ -109,4 +123,4 @@
 | 2026-08-22 23:15:00 | Assistant | 初始化 HANDOFF.md，记录 Codex 升级导致钉钉通知字段异常的排查链路与修复。 |
 | 2026-08-23 01:20:00 | Assistant | 完成 Vibe Notch 对接 DSH (DeepSeek Harness) 消息通知的全链路开发与测试验证。 |
 | 2026-08-23 08:15:00 | Assistant | 彻底排查并修复 DSH 与 Codex 双端通知未达问题（消除了 Pipe 死锁、Cordis 事件隔离并解耦后台生命周期）。 |
-
+| 2026-08-27 16:02:00 | Assistant | 修复上下文压缩恢复阶段误发完成通知，新增结果指纹判定与回归测试；全量 35 测试通过，Release 构建通过并完成本地部署。 |

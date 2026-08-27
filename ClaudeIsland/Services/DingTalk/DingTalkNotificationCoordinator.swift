@@ -18,6 +18,8 @@ final class DingTalkNotificationCoordinator {
     private var hasSeededSnapshot = false
     private var previousPhases: [String: PhaseMarker] = [:]
     private var notifiedPermissionIds: [String: Set<String>] = [:]
+    /// Last known conversation result captured when a session begins compaction.
+    private var compactionBaselines: [String: CompletionFingerprint] = [:]
     /// Serializes concurrent processSnapshot calls — only one runs at a time, in order.
     private var processingTask: Task<Void, Never>?
 
@@ -68,6 +70,7 @@ final class DingTalkNotificationCoordinator {
         hasSeededSnapshot = false
         previousPhases.removeAll()
         notifiedPermissionIds.removeAll()
+        compactionBaselines.removeAll()
     }
 
     /// Processes one complete session snapshot and sends newly triggered messages.
@@ -91,13 +94,21 @@ final class DingTalkNotificationCoordinator {
             case (.processing, .waitingForInput),
                  (.compacting, .waitingForInput),
                  (.waitingForApproval, .waitingForInput):
-                // Only notify if the session actually contains a user prompt or conversation content
-                let hasUserContent = session.conversationInfo.lastUserMessage != nil ||
-                                     session.conversationInfo.firstUserMessage != nil ||
-                                     session.conversationInfo.lastMessage != nil
-                isCompletion = hasUserContent
+                // Compaction recovery can briefly expose the pre-compaction
+                // assistant response as a waiting state. It is not a turn end.
+                let fingerprint = CompletionFingerprint(session: session)
+                if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
+                   baseline == fingerprint {
+                    isCompletion = false
+                } else {
+                    isCompletion = fingerprint.hasUserContent
+                }
             default:
                 isCompletion = false
+            }
+
+            if currentPhase == .compacting {
+                compactionBaselines[session.sessionId] = CompletionFingerprint(session: session)
             }
 
             let logLine = "[\(getpid())] [coordinator] eval session=\(session.sessionId.prefix(8)) cur=\(currentPhase) prev=\(String(describing: previousPhase)) isCompletion=\(isCompletion)\n"
@@ -141,6 +152,7 @@ final class DingTalkNotificationCoordinator {
         let activeIds = Set(sessions.map(\.sessionId))
         previousPhases = previousPhases.filter { activeIds.contains($0.key) }
         notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
+        compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
     }
 
     /// Sends generated messages when enabled credentials are available.
@@ -456,5 +468,24 @@ private enum PhaseMarker: Equatable {
         case .ended:
             self = .ended
         }
+    }
+}
+
+/// Stable, privacy-safe subset used to compare results across compaction.
+private struct CompletionFingerprint: Equatable {
+    let lastUserMessage: String?
+    let lastMessage: String?
+    let lastMessageRole: String?
+
+    /// Captures the conversation fields relevant to a completion notification.
+    init(session: SessionState) {
+        lastUserMessage = session.conversationInfo.lastUserMessage
+        lastMessage = session.conversationInfo.lastMessage
+        lastMessageRole = session.conversationInfo.lastMessageRole
+    }
+
+    /// Whether the session contains enough conversation content for a notification.
+    var hasUserContent: Bool {
+        lastUserMessage != nil || lastMessage != nil
     }
 }
