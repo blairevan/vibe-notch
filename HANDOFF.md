@@ -6,7 +6,7 @@
 
 ## 1. 当前任务
 
-**分支**: `agent/dingtalk-notifications`
+**分支**: `main`
 
 **目标**: 修复 Vibe Notch 钉钉通知中「主题」与「本轮任务」字段缺失或错位的问题，全面适配 Codex Desktop 在 2026-08-21 升级（`0.148.0-alpha.21` 及以上）后引入的 JSONL 会话日志事件重构与 SQLite 数据库字段分离机制。
 
@@ -47,7 +47,7 @@
 ## 4. 下一步计划
 
 1. **多场景长程监控**: 在更多真实场景（如包含多轮工具调用、Subagent 派发、长时间长程任务）中验证通知的稳定性与排版表现。
-2. **代码提交确认**: 待用户确认后，按照 Conventional Commits 规范提交代码并推送到远端 `agent/dingtalk-notifications` 分支。
+2. **代码交付**: 已按照 Conventional Commits 规范提交并推送到远端 `main` 分支；后续仅需进行更多真实长程场景验证。
 
 ---
 
