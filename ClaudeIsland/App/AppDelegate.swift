@@ -56,6 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DingTalkCredentialStore.shared.syncEnabledState()
         dingTalkCoordinator.start()
         ClaudeSessionMonitor.shared.startMonitoring()
+        StatusBarController.shared.setup()
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()

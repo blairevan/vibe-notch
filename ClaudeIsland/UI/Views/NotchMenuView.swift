@@ -39,9 +39,10 @@ struct NotchMenuView: View {
                     .padding(.vertical, 4)
 
                 // Appearance settings
+                DisplayModeRow()
                 ScreenPickerRow(screenSelector: screenSelector)
                 SoundPickerRow(soundSelector: soundSelector)
-                ClaudeDirPickerRow()
+                WorkspaceDirectoriesRow()
 
                 Divider()
                     .background(Color.white.opacity(0.08))

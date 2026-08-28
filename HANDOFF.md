@@ -153,3 +153,18 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 
 | 2026-08-29 01:15:00 | Assistant | 新增 Codex 启动自动安装 Hook 机制，完成 Mac mini 局域网部署与 Codex notify 桥接联调。 |
 | 2026-08-29 01:30:00 | Assistant | 完成启动自检全覆盖、凭据开关自愈绑定以及 System Diagnostics Doctor 面板与单测。 |
+
+---
+
+## 2.8 2026-08-29 Workspace & Directories 统一收拢与纯菜单栏图标模式 (Menu Bar Only)
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | `WorkspaceDirectoriesRow.swift` | 统一收拢 Claude、Codex、DSH 三大 AI 目录管理，实时展示 Active/Not Found 状态，支持分别自定义选择路径与重置。 | ✅ |
+| 2026-08-29 | `StatusBarController.swift` | 新增 macOS 顶部菜单栏 `NSStatusItem` 常驻图标，支持点击切换/展示交互面板。 | ✅ |
+| 2026-08-29 | `DisplayModeRow.swift` & `Settings.swift` | 支持「灵动岛模式 (Dynamic Island)」与「纯菜单栏模式 (Menu Bar Only)」自由切换，Mac mini 上可彻底隐藏顶部悬浮胶囊。 | ✅ |
+| 2026-08-29 | `NotchView.swift` & `AppDelegate.swift` | 在 Menu Bar Only 模式下隐藏静止刘海胶囊，点击菜单栏图标时平滑展开。 | ✅ |
+
+| 2026-08-29 01:40:00 | Assistant | 完成 Workspace & Directories 统一目录行与纯菜单栏图标模式 (Menu Bar Only) 开发及双机部署。 |

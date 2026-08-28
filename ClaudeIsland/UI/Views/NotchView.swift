@@ -185,7 +185,7 @@ struct NotchView: View {
                     }
             }
         }
-        .opacity(isVisible ? 1 : 0)
+        .opacity(isVisible && (AppSettings.displayMode == .dynamicIsland || viewModel.status == .opened) ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(.dark)
         .onAppear {

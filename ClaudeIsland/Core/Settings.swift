@@ -31,6 +31,25 @@ enum NotificationSound: String, CaseIterable {
     }
 }
 
+/// Display presentation modes for the notch UI.
+enum DisplayMode: String, CaseIterable {
+    case dynamicIsland = "Dynamic Island"
+    case menuBarOnly = "Menu Bar Only"
+
+    var localizedLabel: String {
+        switch self {
+        case .dynamicIsland:
+            return "Dynamic Island (Floating)"
+        case .menuBarOnly:
+            return "Menu Bar Only (Icon Only)"
+        }
+    }
+}
+
+extension Notification.Name {
+    static let displayModeDidChange = Notification.Name("com.claudeisland.displayModeDidChange")
+}
+
 enum AppSettings {
     private static let defaults = UserDefaults.standard
 
@@ -39,8 +58,28 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
+        static let codexDirectoryPath = "codexDirectoryPath"
+        static let dshDirectoryPath = "dshDirectoryPath"
         static let showPopupOnPermissionRequest = "showPopupOnPermissionRequest"
         static let dingTalkEnabled = "dingTalkEnabled"
+        static let displayMode = "displayMode"
+    }
+
+    // MARK: - Display Mode
+
+    /// Current display presentation mode (Dynamic Island vs Menu Bar Only).
+    static var displayMode: DisplayMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.displayMode),
+                  let mode = DisplayMode(rawValue: rawValue) else {
+                return .dynamicIsland
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.displayMode)
+            NotificationCenter.default.post(name: .displayModeDidChange, object: nil)
+        }
     }
 
     // MARK: - Notification Sound
@@ -83,11 +122,9 @@ enum AppSettings {
         }
     }
 
-    // MARK: - Claude Directory
+    // MARK: - Workspace & Directories
 
-    /// The name of the Claude config directory under the user's home folder.
-    /// Defaults to ".claude" (standard Claude Code installation).
-    /// Change to ".claude-internal" (or similar) for enterprise/custom distributions.
+    /// Custom Claude configuration directory.
     static var claudeDirectoryName: String {
         get {
             let value = defaults.string(forKey: Keys.claudeDirectoryName) ?? ""
@@ -97,5 +134,26 @@ enum AppSettings {
             defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.claudeDirectoryName)
         }
     }
-}
 
+    /// Custom Codex configuration directory path.
+    static var codexDirectoryPath: String {
+        get {
+            let value = defaults.string(forKey: Keys.codexDirectoryPath) ?? ""
+            return value.isEmpty ? (FileManager.default.homeDirectoryForCurrentUser.path + "/.codex") : value
+        }
+        set {
+            defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.codexDirectoryPath)
+        }
+    }
+
+    /// Custom DeepSeek Harness (DSH) directory path.
+    static var dshDirectoryPath: String {
+        get {
+            let value = defaults.string(forKey: Keys.dshDirectoryPath) ?? ""
+            return value.isEmpty ? (FileManager.default.homeDirectoryForCurrentUser.path + "/.dsh") : value
+        }
+        set {
+            defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.dshDirectoryPath)
+        }
+    }
+}
