@@ -53,6 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         HookInstaller.installIfNeeded()
+        DingTalkCredentialStore.shared.syncEnabledState()
         dingTalkCoordinator.start()
         ClaudeSessionMonitor.shared.startMonitoring()
         NSApplication.shared.setActivationPolicy(.accessory)

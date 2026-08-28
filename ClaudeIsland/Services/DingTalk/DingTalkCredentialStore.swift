@@ -93,6 +93,22 @@ final class DingTalkCredentialStore: DingTalkCredentialStoring {
     func clear() throws {
         try fileAccess.deleteData()
     }
+
+    /// Synchronizes the runtime enabled preference with the presence of valid credentials.
+    /// If valid credentials exist on disk, auto-enables the switch to prevent silent non-delivery.
+    func syncEnabledState() {
+        do {
+            let credentials = try load()
+            if !credentials.token.isEmpty {
+                if !AppSettings.dingTalkEnabled {
+                    AppSettings.dingTalkEnabled = true
+                }
+            }
+        } catch {
+            // Ignore error during startup sync
+        }
+    }
+
 }
 
 /// Reads and atomically writes DingTalk credentials in Application Support.

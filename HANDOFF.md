@@ -116,6 +116,20 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 - Release 构建通过，并已部署到 `/Applications/Vibe Notch.app` 后重启验证。
 - 测试使用独立的 SwiftPM checkout/cache；系统原有 Sparkle checkout 存在损坏对象，未修改项目依赖清单。
 
+
+---
+
+## 2.7 2026-08-29 零配置自启自检系统与 Diagnostic Doctor 面板实现
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | HookInstaller.swift & codex_notify_bridge.py | 增加 Codex config.toml 的 notify 回调自动注入与 codex_notify_bridge.py 自动分发，实现 Codex Desktop 真正零配置即装即用。 | ✅ |
+| 2026-08-29 | DingTalkCredentialStore.swift & AppDelegate.swift | 新增 syncEnabledState() 自愈逻辑：检测到本地存在有效 dingtalk.json 时，应用启动自动同步激活 dingTalkEnabled 开关，避免无声漏发。 | ✅ |
+| 2026-08-29 | DiagnosticDoctor.swift & DoctorRow.swift | 实现 Vibe Notch 一键体检系统（Doctor）：全景检测 Socket、Claude Hooks、Codex Bridge、DSH 插件、DingTalk 凭证并支持一键 Auto-Fix 与 Ping 测试。 | ✅ |
+| 2026-08-29 | DiagnosticDoctorTests.swift & DingTalkCredentialStoreTests.swift | 增加 Doctor 健康检查与凭据开关自愈机制的完整单元测试套件。 | ✅ |
+
 ## 6. 修订记录
 
 | 修订时间 | 修订人 | 修订小结 |
@@ -138,3 +152,4 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-29 | Mac mini 部署与联调 | 完成远程 SSH 局域网同步、钉钉开关自愈、Codex `notify` 原生桥接挂载与真实端到端推送验证。 | ✅ |
 
 | 2026-08-29 01:15:00 | Assistant | 新增 Codex 启动自动安装 Hook 机制，完成 Mac mini 局域网部署与 Codex notify 桥接联调。 |
+| 2026-08-29 01:30:00 | Assistant | 完成启动自检全覆盖、凭据开关自愈绑定以及 System Diagnostics Doctor 面板与单测。 |

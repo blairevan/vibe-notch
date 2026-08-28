@@ -591,7 +591,7 @@ export function apply(ctx) {
         }
     }
 
-    /// Installs Codex Desktop hooks into ~/.codex/hooks and ~/.codex/hooks.json
+    /// Installs Codex Desktop hooks into ~/.codex/hooks, ~/.codex/hooks.json, and ~/.codex/config.toml
     static func installCodexHooksIfNeeded() {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
@@ -601,15 +601,25 @@ export function apply(ctx) {
         let hooksDir = URL(fileURLWithPath: codexDir + "/hooks")
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
         let hooksJsonFile = URL(fileURLWithPath: codexDir + "/hooks.json")
+        let bridgeScript = URL(fileURLWithPath: codexDir + "/codex_notify_bridge.py")
 
         try? fm.createDirectory(at: hooksDir, withIntermediateDirectories: true)
 
-        if let bundled = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
+        if let bundledHook = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
             try? fm.removeItem(at: pythonScript)
-            try? fm.copyItem(at: bundled, to: pythonScript)
+            try? fm.copyItem(at: bundledHook, to: pythonScript)
             try? fm.setAttributes(
                 [.posixPermissions: 0o755],
                 ofItemAtPath: pythonScript.path
+            )
+        }
+
+        if let bundledBridge = Bundle.main.url(forResource: "codex_notify_bridge", withExtension: "py") {
+            try? fm.removeItem(at: bridgeScript)
+            try? fm.copyItem(at: bundledBridge, to: bridgeScript)
+            try? fm.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: bridgeScript.path
             )
         }
 
@@ -653,6 +663,49 @@ export function apply(ctx) {
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: hooksJsonFile)
         }
+
+        updateCodexConfigTomlIfNeeded()
     }
 
+    /// Updates ~/.codex/config.toml to ensure notify is configured with the bridge script.
+    static func updateCodexConfigTomlIfNeeded() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let configPath = home + "/.codex/config.toml"
+        guard fm.fileExists(atPath: configPath) else { return }
+
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+
+        let bridgeScriptPath = home + "/.codex/codex_notify_bridge.py"
+        let notifyLine = "notify = [\"python3\", \"\(bridgeScriptPath)\"]"
+
+        if content.contains("codex_notify_bridge.py") {
+            return
+        }
+
+        var lines = content.components(separatedBy: "\n")
+        var replaced = false
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("notify") && trimmed.contains("=") {
+                lines[i] = notifyLine
+                replaced = true
+                break
+            }
+        }
+
+        if !replaced {
+            var insertIndex = 0
+            for (i, line) in lines.enumerated() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
+                    insertIndex = i
+                    break
+                }
+            }
+            lines.insert(notifyLine, at: insertIndex)
+        }
+
+        let updatedContent = lines.joined(separatedBy: "\n")
+        try? updatedContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+    }
 }

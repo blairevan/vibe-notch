@@ -99,6 +99,19 @@ final class DingTalkCredentialStoreTests: XCTestCase {
         XCTAssertEqual(try store.load(), original)
     }
 
+
+    /// Verifies syncEnabledState auto-enables dingTalkEnabled when valid credentials exist.
+    func testSyncEnabledStateAutoEnablesWhenCredentialsExist() throws {
+        try withTemporaryStore { store, _, _ in
+            AppSettings.dingTalkEnabled = false
+            try store.save(DingTalkCredentials(token: "valid-token", signingSecret: "valid-secret"))
+
+            store.syncEnabledState()
+
+            XCTAssertTrue(AppSettings.dingTalkEnabled)
+        }
+    }
+
     /// Verifies clear removes the complete credential file.
     func testClearRemovesCredentialFile() throws {
         try withTemporaryStore { store, _, fileURL in
