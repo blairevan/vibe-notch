@@ -165,7 +165,7 @@ final class DiagnosticDoctor: ObservableObject {
                 category: "Codex Desktop",
                 title: "Codex Desktop Bridge",
                 status: codexOk ? .ok : .error("Integration incomplete"),
-                details: codexDetails.joined(separatedBy: ", ")
+                details: codexDetails.joined(separator: ", ")
             ))
         } else {
             items.append(DiagnosticItem(

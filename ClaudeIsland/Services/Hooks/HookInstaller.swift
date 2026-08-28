@@ -705,7 +705,7 @@ export function apply(ctx) {
             lines.insert(notifyLine, at: insertIndex)
         }
 
-        let updatedContent = lines.joined(separatedBy: "\n")
-        try? updatedContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+        let updatedContent = lines.joined(separator: "\n")
+        try? updatedContent.write(toFile: configPath, atomically: true, encoding: String.Encoding.utf8)
     }
 }
