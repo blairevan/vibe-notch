@@ -30,6 +30,7 @@ struct HookInstaller {
 
         updateSettings(at: ClaudePaths.settingsFile)
         installDshPluginIfNeeded()
+        installCodexHooksIfNeeded()
     }
 
     private static func updateSettings(at settingsURL: URL) {
@@ -589,4 +590,69 @@ export function apply(ctx) {
             try? updatedData.write(to: URL(fileURLWithPath: profilePath))
         }
     }
+
+    /// Installs Codex Desktop hooks into ~/.codex/hooks and ~/.codex/hooks.json
+    static func installCodexHooksIfNeeded() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let codexDir = home + "/.codex"
+        guard fm.fileExists(atPath: codexDir) else { return }
+
+        let hooksDir = URL(fileURLWithPath: codexDir + "/hooks")
+        let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
+        let hooksJsonFile = URL(fileURLWithPath: codexDir + "/hooks.json")
+
+        try? fm.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+
+        if let bundled = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
+            try? fm.removeItem(at: pythonScript)
+            try? fm.copyItem(at: bundled, to: pythonScript)
+            try? fm.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: pythonScript.path
+            )
+        }
+
+        let python = detectPython()
+        let command = "\(python) '\(pythonScript.path)'"
+        let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
+        let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
+        let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
+        let withMatcherAndTimeout: [[String: Any]] = [["matcher": "*", "hooks": hookEntryWithTimeout]]
+        let withoutMatcher: [[String: Any]] = [["hooks": hookEntry]]
+        let preCompactConfig: [[String: Any]] = [
+            ["matcher": "auto", "hooks": hookEntry],
+            ["matcher": "manual", "hooks": hookEntry]
+        ]
+
+        var json: [String: Any] = [:]
+        if let data = try? Data(contentsOf: hooksJsonFile),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            json = existing
+        }
+
+        var hooks = json["hooks"] as? [String: Any] ?? [:]
+        let codexEvents: [(String, [[String: Any]])] = [
+            ("UserPromptSubmit", withoutMatcher),
+            ("PreToolUse", withMatcher),
+            ("PostToolUse", withMatcher),
+            ("PermissionRequest", withMatcherAndTimeout),
+            ("Notification", withMatcher),
+            ("Stop", withoutMatcher),
+            ("SessionStart", withoutMatcher),
+            ("SessionEnd", withoutMatcher),
+            ("PreCompact", preCompactConfig),
+            ("PostCompact", preCompactConfig)
+        ]
+
+        for (event, config) in codexEvents {
+            hooks[event] = config
+        }
+
+        json["hooks"] = hooks
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: hooksJsonFile)
+        }
+    }
+
 }

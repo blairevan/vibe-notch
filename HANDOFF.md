@@ -124,3 +124,17 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-23 01:20:00 | Assistant | 完成 Vibe Notch 对接 DSH (DeepSeek Harness) 消息通知的全链路开发与测试验证。 |
 | 2026-08-23 08:15:00 | Assistant | 彻底排查并修复 DSH 与 Codex 双端通知未达问题（消除了 Pipe 死锁、Cordis 事件隔离并解耦后台生命周期）。 |
 | 2026-08-27 16:02:00 | Assistant | 修复上下文压缩恢复阶段误发完成通知，新增结果指纹判定与回归测试；全量 35 测试通过，Release 构建通过并完成本地部署。 |
+
+---
+
+## 2.6 2026-08-29 Codex 启动自检自动安装 Hook 与 Mac mini 部署
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | `HookInstaller.swift` | 新增 `installCodexHooksIfNeeded`，启动时自动检测 `~/.codex` 并分发 `~/.codex/hooks/claude-island-state.py` 与 `hooks.json`。 | ✅ |
+| 2026-08-29 | `docs/assets/` | 增加 Mac mini 融合风格应用图标资源 `macmini_vibe_notch_dingtalk.png`。 | ✅ |
+| 2026-08-29 | Mac mini 部署与联调 | 完成远程 SSH 局域网同步、钉钉开关自愈、Codex `notify` 原生桥接挂载与真实端到端推送验证。 | ✅ |
+
+| 2026-08-29 01:15:00 | Assistant | 新增 Codex 启动自动安装 Hook 机制，完成 Mac mini 局域网部署与 Codex notify 桥接联调。 |
