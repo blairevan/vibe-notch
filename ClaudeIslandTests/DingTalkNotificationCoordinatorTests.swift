@@ -15,20 +15,52 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(recorder.messages.isEmpty)
     }
 
-    /// Verifies a transition to waiting-for-input notifies exactly once.
-    func testTransitionToWaitingForInputNotifiesOnce() async {
+   /// Verifies a transition to waiting-for-input notifies exactly once.
+   func testTransitionToWaitingForInputNotifiesOnce() async {
+       let recorder = MessageRecorder()
+       let coordinator = makeCoordinator(recorder: recorder)
+
+       await coordinator.processSnapshot([makeSession(phase: .processing)])
+       await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+       await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+
+       XCTAssertEqual(recorder.messages.count, 1)
+       XCTAssertEqual(recorder.messages.first?.title, "Vibe Notch - Task Completed")
+   }
+
+    /// Verifies repeated completion transitions with identical assistant responses are deduplicated.
+    func testDuplicateCompletionSnapshotIsNotifiedOnlyOnce() async {
         let recorder = MessageRecorder()
         let coordinator = makeCoordinator(recorder: recorder)
 
-        await coordinator.processSnapshot([makeSession(phase: .processing)])
-        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
-        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
-
+        // Turn 1 completion
+        let sessionTurn1 = makeSession(phase: .processing)
+        await coordinator.processSnapshot([sessionTurn1])
+        var sessionTurn1Done = sessionTurn1
+        sessionTurn1Done.phase = .waitingForInput
+        await coordinator.processSnapshot([sessionTurn1Done])
         XCTAssertEqual(recorder.messages.count, 1)
-        XCTAssertEqual(recorder.messages.first?.title, "Vibe Notch - Task Completed")
+
+        // Duplicate trigger (e.g. notify bridge or repeated stop hook with identical content)
+        var sessionTurn1Duplicate = sessionTurn1Done
+        sessionTurn1Duplicate.phase = .processing
+        await coordinator.processSnapshot([sessionTurn1Duplicate])
+        await coordinator.processSnapshot([sessionTurn1Done])
+        XCTAssertEqual(recorder.messages.count, 1, "Duplicate completion for same turn must be suppressed")
+
+        // Turn 2 completion with new user input and new assistant response
+        var sessionTurn2 = sessionTurn1
+        sessionTurn2.conversationInfo.lastUserMessage = "新一轮提问"
+        sessionTurn2.conversationInfo.lastMessage = "新一轮回答"
+        sessionTurn2.phase = .processing
+        await coordinator.processSnapshot([sessionTurn2])
+        var sessionTurn2Done = sessionTurn2
+        sessionTurn2Done.phase = .waitingForInput
+        await coordinator.processSnapshot([sessionTurn2Done])
+        XCTAssertEqual(recorder.messages.count, 2, "Distinct turn completion must be notified")
     }
 
-    /// Verifies a newly discovered waiting session is not mistaken for a completed task.
+   /// Verifies a newly discovered waiting session is not mistaken for a completed task.
     func testNewWaitingSessionDoesNotNotifyUntilKnownTransition() async {
         let recorder = MessageRecorder()
         let coordinator = makeCoordinator(recorder: recorder)
@@ -520,5 +552,4 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-
 

@@ -128,54 +128,45 @@ final class DiagnosticDoctor: ObservableObject {
             ))
         }
 
-        // 3. Check Codex Desktop Integration
-        let codexDir = home + "/.codex"
-        if fm.fileExists(atPath: codexDir) {
-            let bridgeScript = codexDir + "/codex_notify_bridge.py"
-            let configToml = codexDir + "/config.toml"
-            let hooksJson = codexDir + "/hooks.json"
+       // 3. Check Codex Desktop Integration
+       let codexDir = home + "/.codex"
+       if fm.fileExists(atPath: codexDir) {
+            let pythonScript = codexDir + "/hooks/claude-island-state.py"
+           let hooksJson = codexDir + "/hooks.json"
 
-            var codexOk = true
-            var codexDetails: [String] = []
+           var codexOk = true
+           var codexDetails: [String] = []
 
-            if fm.fileExists(atPath: bridgeScript) {
-                codexDetails.append("Bridge script deployed")
+            if fm.fileExists(atPath: pythonScript) {
+                codexDetails.append("Hook script deployed")
             } else {
                 codexOk = false
-                codexDetails.append("Bridge script missing")
+                codexDetails.append("Hook script missing")
             }
 
-            if fm.fileExists(atPath: hooksJson) {
-                codexDetails.append("hooks.json deployed")
-            } else {
-                codexOk = false
-                codexDetails.append("hooks.json missing")
-            }
+           if fm.fileExists(atPath: hooksJson) {
+               codexDetails.append("hooks.json deployed")
+           } else {
+               codexOk = false
+               codexDetails.append("hooks.json missing")
+           }
 
-            if let tomlContent = try? String(contentsOfFile: configToml, encoding: .utf8),
-               tomlContent.contains("codex_notify_bridge.py") {
-                codexDetails.append("config.toml notify mapped")
-            } else {
-                codexOk = false
-                codexDetails.append("config.toml notify not mapped to bridge")
-            }
-
-            items.append(DiagnosticItem(
-                id: "codex-integration",
-                category: "Codex Desktop",
-                title: "Codex Desktop Bridge",
-                status: codexOk ? .ok : .error("Integration incomplete"),
-                details: codexDetails.joined(separator: ", ")
-            ))
-        } else {
-            items.append(DiagnosticItem(
-                id: "codex-integration",
-                category: "Codex Desktop",
-                title: "Codex Desktop Bridge",
-                status: .notApplicable,
-                details: "~/.codex directory not found (Codex Desktop not installed)."
-            ))
-        }
+           items.append(DiagnosticItem(
+               id: "codex-integration",
+               category: "Codex Desktop",
+                title: "Codex Desktop Hooks",
+               status: codexOk ? .ok : .error("Integration incomplete"),
+               details: codexDetails.joined(separator: ", ")
+           ))
+       } else {
+           items.append(DiagnosticItem(
+               id: "codex-integration",
+               category: "Codex Desktop",
+                title: "Codex Desktop Hooks",
+               status: .notApplicable,
+               details: "~/.codex directory not found (Codex Desktop not installed)."
+           ))
+       }
 
         // 4. Check DSH (DeepSeek Harness) Integration
         let dshDir = home + "/.dsh"

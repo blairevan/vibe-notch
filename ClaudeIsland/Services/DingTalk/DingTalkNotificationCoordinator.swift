@@ -17,10 +17,12 @@ final class DingTalkNotificationCoordinator {
     private var subscription: AnyCancellable?
     private var hasSeededSnapshot = false
     private var previousPhases: [String: PhaseMarker] = [:]
-    private var notifiedPermissionIds: [String: Set<String>] = [:]
-    /// Last known conversation result captured when a session begins compaction.
-    private var compactionBaselines: [String: CompletionFingerprint] = [:]
-    /// Serializes concurrent processSnapshot calls — only one runs at a time, in order.
+   private var notifiedPermissionIds: [String: Set<String>] = [:]
+   /// Last known conversation result captured when a session begins compaction.
+   private var compactionBaselines: [String: CompletionFingerprint] = [:]
+    /// Last notified completion fingerprint for each session, used for deduplication.
+    private var lastNotifiedCompletions: [String: CompletionFingerprint] = [:]
+   /// Serializes concurrent processSnapshot calls — only one runs at a time, in order.
     private var processingTask: Task<Void, Never>?
 
     /// Creates a coordinator with injectable state and transport dependencies.
@@ -68,10 +70,11 @@ final class DingTalkNotificationCoordinator {
         processingTask?.cancel()
         processingTask = nil
         hasSeededSnapshot = false
-        previousPhases.removeAll()
-        notifiedPermissionIds.removeAll()
-        compactionBaselines.removeAll()
-    }
+       previousPhases.removeAll()
+       notifiedPermissionIds.removeAll()
+       compactionBaselines.removeAll()
+        lastNotifiedCompletions.removeAll()
+   }
 
     /// Processes one complete session snapshot and sends newly triggered messages.
     func processSnapshot(_ sessions: [SessionState]) async {
@@ -83,22 +86,24 @@ final class DingTalkNotificationCoordinator {
         removeStateForMissingSessions(sessions)
         var messages: [DingTalkMessage] = []
 
-        for session in sessions {
-            let currentPhase = PhaseMarker(session.phase)
-            let previousPhase = previousPhases[session.sessionId]
+       for session in sessions {
+           let currentPhase = PhaseMarker(session.phase)
+           let previousPhase = previousPhases[session.sessionId]
+            let fingerprint = CompletionFingerprint(session: session)
 
-            Self.logger.info("[DingTalk Debug] session=\(session.sessionId.prefix(8), privacy: .public) currentPhase=\(String(describing: currentPhase), privacy: .public) previousPhase=\(String(describing: previousPhase), privacy: .public)")
+           Self.logger.info("[DingTalk Debug] session=\(session.sessionId.prefix(8), privacy: .public) currentPhase=\(String(describing: currentPhase), privacy: .public) previousPhase=\(String(describing: previousPhase), privacy: .public)")
 
             let isCompletion: Bool
             switch (previousPhase, currentPhase) {
-            case (.processing, .waitingForInput),
-                 (.compacting, .waitingForInput),
-                 (.waitingForApproval, .waitingForInput):
-                // Compaction recovery can briefly expose the pre-compaction
-                // assistant response as a waiting state. It is not a turn end.
-                let fingerprint = CompletionFingerprint(session: session)
-                if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
+           case (.processing, .waitingForInput),
+                (.compacting, .waitingForInput),
+                (.waitingForApproval, .waitingForInput):
+               // Compaction recovery can briefly expose the pre-compaction
+               // assistant response as a waiting state. It is not a turn end.
+               if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
                    baseline == fingerprint {
+                    isCompletion = false
+                } else if lastNotifiedCompletions[session.sessionId] == fingerprint {
                     isCompletion = false
                 } else {
                     isCompletion = fingerprint.hasUserContent
@@ -107,19 +112,20 @@ final class DingTalkNotificationCoordinator {
                 isCompletion = false
             }
 
-            if currentPhase == .compacting {
-                compactionBaselines[session.sessionId] = CompletionFingerprint(session: session)
-            }
+           if currentPhase == .compacting {
+                compactionBaselines[session.sessionId] = fingerprint
+           }
 
             let logLine = "[\(getpid())] [coordinator] eval session=\(session.sessionId.prefix(8)) cur=\(currentPhase) prev=\(String(describing: previousPhase)) isCompletion=\(isCompletion)\n"
             if let d = logLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
                 fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }
 
-            if isCompletion {
-                Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
-                messages.append(taskCompletedMessage(for: session))
-            }
+           if isCompletion {
+                lastNotifiedCompletions[session.sessionId] = fingerprint
+               Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
+               messages.append(taskCompletedMessage(for: session))
+           }
 
             if case .waitingForApproval(let toolUseId) = currentPhase {
                 var sessionIds = notifiedPermissionIds[session.sessionId] ?? []
@@ -136,24 +142,25 @@ final class DingTalkNotificationCoordinator {
     }
 
     /// Seeds current phases and permissions without generating historical messages.
-    private func seedSnapshot(_ sessions: [SessionState]) {
-        hasSeededSnapshot = true
-        for session in sessions {
-            let phase = PhaseMarker(session.phase)
-            previousPhases[session.sessionId] = phase
-            if case .waitingForApproval(let toolUseId) = phase {
-                notifiedPermissionIds[session.sessionId] = [toolUseId]
-            }
-        }
-    }
+   private func seedSnapshot(_ sessions: [SessionState]) {
+       hasSeededSnapshot = true
+       for session in sessions {
+           let phase = PhaseMarker(session.phase)
+           previousPhases[session.sessionId] = phase
+           if case .waitingForApproval(let toolUseId) = phase {
+               notifiedPermissionIds[session.sessionId] = [toolUseId]
+           }
+       }
+   }
 
     /// Removes state belonging to sessions no longer present in the snapshot.
     private func removeStateForMissingSessions(_ sessions: [SessionState]) {
         let activeIds = Set(sessions.map(\.sessionId))
-        previousPhases = previousPhases.filter { activeIds.contains($0.key) }
-        notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
-        compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
-    }
+       previousPhases = previousPhases.filter { activeIds.contains($0.key) }
+       notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
+       compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
+        lastNotifiedCompletions = lastNotifiedCompletions.filter { activeIds.contains($0.key) }
+   }
 
     /// Sends generated messages when enabled credentials are available.
     private func sendMessagesIfConfigured(_ messages: [DingTalkMessage]) async {
@@ -338,11 +345,11 @@ final class DingTalkNotificationCoordinator {
             .joined(separator: "\n> ")
     }
 
-    /// Formats session active duration based on turnStartTime or conversation timestamp.
-    private func formattedDuration(for session: SessionState) -> String {
-        let referenceStart = session.turnStartTime ?? session.conversationInfo.lastUserMessageDate ?? session.createdAt
-        let interval = max(0, now().timeIntervalSince(referenceStart))
-        let totalSeconds = Int(interval)
+   /// Formats session active duration based on turnStartTime or conversation timestamp.
+   private func formattedDuration(for session: SessionState) -> String {
+        let referenceStart = session.conversationInfo.lastUserMessageDate ?? session.turnStartTime ?? session.createdAt
+       let interval = max(0, now().timeIntervalSince(referenceStart))
+       let totalSeconds = Int(interval)
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         if minutes > 0 {

@@ -168,3 +168,18 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-29 | `NotchView.swift` & `AppDelegate.swift` | 在 Menu Bar Only 模式下隐藏静止刘海胶囊，点击菜单栏图标时平滑展开。 | ✅ |
 
 | 2026-08-29 01:40:00 | Assistant | 完成 Workspace & Directories 统一目录行与纯菜单栏图标模式 (Menu Bar Only) 开发及双机部署。 |
+
+---
+
+## 2.9 2026-08-29 消除 Codex 双重通知与通知协调器防抖去重
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | HookInstaller.swift | 移除 config.toml 中 codex_notify_bridge.py 的强制注入，增加 cleanUpCodexConfigTomlIfNeeded 自动清理老旧桥接配置。 | ✅ |
+| 2026-08-29 | DingTalkNotificationCoordinator.swift | 新增 lastNotifiedCompletions 指纹防抖机制，对同一会话、同一次执行结果的重复完成状态予以去重拦截。 | ✅ |
+| 2026-08-29 | DiagnosticDoctor.swift | Codex 健康检查收拢至 ~/.codex/hooks.json 与 claude-island-state.py，不再强依赖 notify 桥接脚本。 | ✅ |
+| 2026-08-29 | DingTalkNotificationCoordinatorTests.swift | 新增 testDuplicateCompletionSnapshotIsNotifiedOnlyOnce 单元测试，全量 39 个测试用例全部通过。 | ✅ |
+
+| 2026-08-29 11:55:00 | Assistant | 彻底消除 Codex 双重钉钉推送问题，实现原生 Hooks 纯净接入、协调器去重防抖与本地 Release 部署。 |

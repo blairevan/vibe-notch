@@ -605,25 +605,19 @@ export function apply(ctx) {
 
         try? fm.createDirectory(at: hooksDir, withIntermediateDirectories: true)
 
-        if let bundledHook = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
-            try? fm.removeItem(at: pythonScript)
-            try? fm.copyItem(at: bundledHook, to: pythonScript)
-            try? fm.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: pythonScript.path
-            )
-        }
+       if let bundledHook = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
+           try? fm.removeItem(at: pythonScript)
+           try? fm.copyItem(at: bundledHook, to: pythonScript)
+           try? fm.setAttributes(
+               [.posixPermissions: 0o755],
+               ofItemAtPath: pythonScript.path
+           )
+       }
 
-        if let bundledBridge = Bundle.main.url(forResource: "codex_notify_bridge", withExtension: "py") {
-            try? fm.removeItem(at: bridgeScript)
-            try? fm.copyItem(at: bundledBridge, to: bridgeScript)
-            try? fm.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: bridgeScript.path
-            )
-        }
+        // Clean up legacy bridge script since hooks.json handles full lifecycle
+        try? fm.removeItem(at: bridgeScript)
 
-        let python = detectPython()
+       let python = detectPython()
         let command = "\(python) '\(pythonScript.path)'"
         let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
         let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
@@ -659,53 +653,42 @@ export function apply(ctx) {
             hooks[event] = config
         }
 
-        json["hooks"] = hooks
-        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: hooksJsonFile)
-        }
+       json["hooks"] = hooks
+       if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+           try? data.write(to: hooksJsonFile)
+       }
 
-        updateCodexConfigTomlIfNeeded()
+        cleanUpCodexConfigTomlIfNeeded()
     }
 
-    /// Updates ~/.codex/config.toml to ensure notify is configured with the bridge script.
-    static func updateCodexConfigTomlIfNeeded() {
+    /// Cleans up any legacy codex_notify_bridge.py references from ~/.codex/config.toml
+    static func cleanUpCodexConfigTomlIfNeeded() {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
         let configPath = home + "/.codex/config.toml"
         guard fm.fileExists(atPath: configPath) else { return }
 
         guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
-
-        let bridgeScriptPath = home + "/.codex/codex_notify_bridge.py"
-        let notifyLine = "notify = [\"python3\", \"\(bridgeScriptPath)\"]"
-
-        if content.contains("codex_notify_bridge.py") {
-            return
-        }
+        guard content.contains("codex_notify_bridge.py") else { return }
 
         var lines = content.components(separatedBy: "\n")
-        var replaced = false
+        var modified = false
         for (i, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("notify") && trimmed.contains("=") {
-                lines[i] = notifyLine
-                replaced = true
-                break
-            }
-        }
-
-        if !replaced {
-            var insertIndex = 0
-            for (i, line) in lines.enumerated() {
-                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-                    insertIndex = i
-                    break
+            if trimmed.hasPrefix("notify") && trimmed.contains("codex_notify_bridge.py") {
+                if trimmed.contains("SkyComputerUseClient") {
+                    let skyClient = home + "/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+                    lines[i] = "notify = [\"\(skyClient)\", \"turn-ended\"]"
+                } else {
+                    lines[i] = ""
                 }
+                modified = true
             }
-            lines.insert(notifyLine, at: insertIndex)
         }
 
-        let updatedContent = lines.joined(separator: "\n")
-        try? updatedContent.write(toFile: configPath, atomically: true, encoding: String.Encoding.utf8)
+        if modified {
+            let updatedContent = lines.filter { !$0.isEmpty }.joined(separator: "\n")
+            try? updatedContent.write(toFile: configPath, atomically: true, encoding: String.Encoding.utf8)
+        }
     }
 }
