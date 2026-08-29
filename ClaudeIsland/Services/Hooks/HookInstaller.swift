@@ -614,8 +614,14 @@ export function apply(ctx) {
            )
        }
 
-        // Clean up legacy bridge script since hooks.json handles full lifecycle
-        try? fm.removeItem(at: bridgeScript)
+        if let bundledBridge = Bundle.main.url(forResource: "codex_notify_bridge", withExtension: "py") {
+            try? fm.removeItem(at: bridgeScript)
+            try? fm.copyItem(at: bundledBridge, to: bridgeScript)
+            try? fm.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: bridgeScript.path
+            )
+        }
 
        let python = detectPython()
         let command = "\(python) '\(pythonScript.path)'"
@@ -653,42 +659,59 @@ export function apply(ctx) {
             hooks[event] = config
         }
 
-       json["hooks"] = hooks
-       if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-           try? data.write(to: hooksJsonFile)
+      json["hooks"] = hooks
+      if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+          try? data.write(to: hooksJsonFile)
+      }
+
+        updateCodexConfigTomlIfNeeded()
+   }
+
+    /// Updates ~/.codex/config.toml to ensure notify is configured with the bridge script.
+    static func updateCodexConfigTomlIfNeeded() {
+       let fm = FileManager.default
+       let home = fm.homeDirectoryForCurrentUser.path
+       let configPath = home + "/.codex/config.toml"
+       guard fm.fileExists(atPath: configPath) else { return }
+
+       guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+        if content.contains("codex_notify_bridge.py") {
+            return
+        }
+
+        let bridgeScriptPath = home + "/.codex/codex_notify_bridge.py"
+        let skyClientPath = home + "/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+
+        let notifyLine: String
+        if fm.fileExists(atPath: skyClientPath) {
+            notifyLine = "notify = [\"\(skyClientPath)\", \"turn-ended\", \"--previous-notify\", \"[\\\"python3\\\",\\\"\(bridgeScriptPath)\\\"]\"]"
+        } else {
+            notifyLine = "notify = [\"python3\", \"\(bridgeScriptPath)\"]"
+        }
+
+       var lines = content.components(separatedBy: "\n")
+        var replaced = false
+       for (i, line) in lines.enumerated() {
+           let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("notify") && trimmed.contains("=") {
+                lines[i] = notifyLine
+                replaced = true
+                break
+           }
        }
 
-        cleanUpCodexConfigTomlIfNeeded()
-    }
-
-    /// Cleans up any legacy codex_notify_bridge.py references from ~/.codex/config.toml
-    static func cleanUpCodexConfigTomlIfNeeded() {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        let configPath = home + "/.codex/config.toml"
-        guard fm.fileExists(atPath: configPath) else { return }
-
-        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
-        guard content.contains("codex_notify_bridge.py") else { return }
-
-        var lines = content.components(separatedBy: "\n")
-        var modified = false
-        for (i, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("notify") && trimmed.contains("codex_notify_bridge.py") {
-                if trimmed.contains("SkyComputerUseClient") {
-                    let skyClient = home + "/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
-                    lines[i] = "notify = [\"\(skyClient)\", \"turn-ended\"]"
-                } else {
-                    lines[i] = ""
+        if !replaced {
+            var insertIndex = 0
+            for (i, line) in lines.enumerated() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
+                    insertIndex = i
+                    break
                 }
-                modified = true
             }
-        }
+            lines.insert(notifyLine, at: insertIndex)
+       }
 
-        if modified {
-            let updatedContent = lines.filter { !$0.isEmpty }.joined(separator: "\n")
-            try? updatedContent.write(toFile: configPath, atomically: true, encoding: String.Encoding.utf8)
-        }
-    }
+        let updatedContent = lines.joined(separator: "\n")
+        try? updatedContent.write(toFile: configPath, atomically: true, encoding: String.Encoding.utf8)
+   }
 }

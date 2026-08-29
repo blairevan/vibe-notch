@@ -183,3 +183,17 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-29 | DingTalkNotificationCoordinatorTests.swift | 新增 testDuplicateCompletionSnapshotIsNotifiedOnlyOnce 单元测试，全量 39 个测试用例全部通过。 | ✅ |
 
 | 2026-08-29 11:55:00 | Assistant | 彻底消除 Codex 双重钉钉推送问题，实现原生 Hooks 纯净接入、协调器去重防抖与本地 Release 部署。 |
+
+---
+
+## 2.10 2026-08-29 Mac mini Codex 通知全兼容与背景任务过滤
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | HookInstaller.swift & codex_notify_bridge.py | 重新优化 notify bridge，支持精准解析 Codex 传入的 argv 载荷，过滤标题生成背景轮次，确保无 hooks.json 环境（如 Mac mini）可靠触发完成通知。 | ✅ |
+| 2026-08-29 | DiagnosticDoctor.swift | 恢复 Codex 桌面桥接全项健康巡检（Hooks、Bridge 脚本与 notify 挂载）。 | ✅ |
+| 2026-08-29 | Mac mini 部署与联调 | 完成局域网双机同步部署，实测 Codex 任务完成与背景任务过滤，钉钉通知精准单次送达。 | ✅ |
+
+| 2026-08-29 12:12:00 | Assistant | 完善 Codex notify bridge 载荷解析与背景任务过滤，完成 Mac mini 双机同步并实测通过。 |
