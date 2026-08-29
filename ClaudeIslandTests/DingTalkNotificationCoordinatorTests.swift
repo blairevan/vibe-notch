@@ -206,7 +206,7 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertTrue(text.contains("请帮我增加本轮任务展示"))
         XCTAssertTrue(text.contains("任务已顺利完成，欢迎进行测试。"))
         XCTAssertTrue(text.contains("1分25秒"))
-        XCTAssertTrue(text.contains("ttys002 (PID: 12345)"))
+        XCTAssertTrue(text.contains("Claude Code (ttys002, PID: 12345)"))
         XCTAssertFalse(text.contains("/Users/private/vibe-notch"))
     }
 
@@ -444,6 +444,19 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(info.firstUserMessage, "帮我分析项目结构")
     }
 
+    /// Verifies Claude command tags such as <command-name> are cleaned properly.
+    func testClaudeCommandTagCleaning() async {
+        let lines = [
+            #"{"type":"user","message":{"content":"<command-name>week-llmnews-podcast</command-name>\n<command-args>--mode podcast</command-args>"},"timestamp":"2026-08-29T09:47:54.000Z"}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"轮询脚本已启动。"}]},"timestamp":"2026-08-29T09:47:57.000Z"}"#
+        ]
+        let jsonl = lines.joined(separator: "\n")
+
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isCodex: false, isDsh: false)
+        XCTAssertEqual(info.firstUserMessage, "week-llmnews-podcast")
+        XCTAssertEqual(info.lastUserMessage, "week-llmnews-podcast")
+        XCTAssertEqual(info.lastMessage, "轮询脚本已启动。")
+    }
 
     /// Tests live file parsing from disk if ~/.dsh session exists
     func testLiveDshSessionFileParsing() async {
@@ -552,4 +565,3 @@ private final class TestCredentialStore: DingTalkCredentialStoring {
     /// Clears are not used by coordinator tests.
     func clear() throws {}
 }
-

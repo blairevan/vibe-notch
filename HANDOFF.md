@@ -197,3 +197,17 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-29 | Mac mini 部署与联调 | 完成局域网双机同步部署，实测 Codex 任务完成与背景任务过滤，钉钉通知精准单次送达。 | ✅ |
 
 | 2026-08-29 12:12:00 | Assistant | 完善 Codex notify bridge 载荷解析与背景任务过滤，完成 Mac mini 双机同步并实测通过。 |
+
+---
+
+## 2.11 2026-08-29 终端展示格式优化与 Claude Code XML 标签清洗
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-08-29 | DingTalkNotificationCoordinator.swift | 优化终端名称格式化：交互式终端统一定制标注为 Claude Code (ttys022, PID: 50657) 或 Codex CLI (ttys001, PID: ...)。 | ✅ |
+| 2026-08-29 | ConversationParser.swift | 增强 XML 标签清洗逻辑：自动提取 command-name 纯文本，彻底剥除 command-args、command-message 及残留的闭合标签。 | ✅ |
+| 2026-08-29 | DingTalkNotificationCoordinatorTests.swift | 新增 testClaudeCommandTagCleaning 单测，更新终端断言，全量 40 个测试用例全部通过。 | ✅ |
+
+| 2026-08-29 17:55:00 | Assistant | 完成 Claude Code 终端标识友好化展示与 XML 标签深度清洗，完成本地及 Mac mini 部署。 |

@@ -332,8 +332,13 @@ actor ConversationParser {
             }
         }
 
-        // 2. Strip XML blocks that Codex prepends (recommended plugins, instructions, environment context, in-app browser)
+        // 2. Extract command name from <command-name>...</command-name> if present
         var cleaned = trimmed
+        if let regex = try? NSRegularExpression(pattern: #"<command-name>(.*?)</command-name>"#, options: []) {
+            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: NSRange(location: 0, length: cleaned.utf16.count), withTemplate: "$1")
+        }
+
+        // 3. Strip XML blocks that Codex/Claude/DSH prepend
         let tagPatterns = [
             #"<recommended_plugins>[\s\S]*?</recommended_plugins>"#,
             #"<INSTRUCTIONS>[\s\S]*?</INSTRUCTIONS>"#,
@@ -344,12 +349,17 @@ actor ConversationParser {
             #"<collaboration_mode>[\s\S]*?</collaboration_mode>"#,
             #"<permissions instructions>[\s\S]*?</permissions instructions>"#,
             #"<system-reminder>[\s\S]*?</system-reminder>"#,
-            #"<available_skills>[\s\S]*?</available_skills>"#
+            #"<available_skills>[\s\S]*?</available_skills>"#,
+            #"<command-args>[\s\S]*?</command-args>"#,
+            #"<command-message>[\s\S]*?</command-message>"#,
+            #"<local-command[\s\S]*?</local-command>"#,
+            #"<task_instructions>[\s\S]*?</task_instructions>"#
         ]
         for pattern in tagPatterns {
             cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
         }
         cleaned = cleaned.replacingOccurrences(of: #"# AGENTS\.md instructions"#, with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: #"</?[a-zA-Z0-9_\-]+(?:\s+[^>]*)?/?>"#, with: "", options: .regularExpression)
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? trimmed : cleaned
     }
@@ -523,6 +533,7 @@ actor ConversationParser {
         var lastMessageRole: String?
         var lastToolName: String?
         var firstUserMessage: String?
+        var lastUserMessage: String?
         var lastUserMessageDate: Date?
         var usage = UsageInfo()
 
@@ -557,8 +568,9 @@ actor ConversationParser {
             if type == "user" && !isMeta {
                 if let message = json["message"] as? [String: Any],
                    let msgContent = message["content"] as? String {
-                    if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                        firstUserMessage = Self.truncateMessage(msgContent, maxLength: 50)
+                    let cleaned = Self.cleanUserPrompt(msgContent)
+                    if !cleaned.isEmpty && !msgContent.hasPrefix("Caveat:") {
+                        firstUserMessage = Self.truncateMessage(cleaned, maxLength: 80)
                         break
                     }
                 }
@@ -610,7 +622,9 @@ actor ConversationParser {
                 let isMeta = json["isMeta"] as? Bool ?? false
                 if !isMeta, let message = json["message"] as? [String: Any] {
                     if let msgContent = message["content"] as? String {
-                        if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
+                        let cleaned = Self.cleanUserPrompt(msgContent)
+                        if !cleaned.isEmpty && !msgContent.hasPrefix("Caveat:") {
+                            lastUserMessage = cleaned
                             if let timestampStr = json["timestamp"] as? String {
                                 lastUserMessageDate = formatter.date(from: timestampStr)
                             }
@@ -621,7 +635,7 @@ actor ConversationParser {
             }
 
             if summary == nil, type == "summary", let summaryText = json["summary"] as? String {
-                summary = summaryText
+                summary = Self.cleanUserPrompt(summaryText)
             }
 
             if summary != nil && lastMessage != nil && foundLastUserMessage {
@@ -636,7 +650,8 @@ actor ConversationParser {
             lastToolName: lastToolName,
             firstUserMessage: firstUserMessage,
             lastUserMessageDate: lastUserMessageDate,
-            usage: usage
+            usage: usage,
+            lastUserMessage: lastUserMessage
         )
     }
 
@@ -1667,4 +1682,3 @@ extension ConversationParser {
         return tools
     }
 }
-

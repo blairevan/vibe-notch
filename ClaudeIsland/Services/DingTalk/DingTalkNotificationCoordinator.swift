@@ -380,32 +380,51 @@ final class DingTalkNotificationCoordinator {
             }
         }
 
-        // 2. Real terminal TTY (if active interactive terminal)
-        let tty = session.tty
-        if let tty = tty, !tty.isEmpty {
-            if let pid = session.pid {
-                return "\(tty) (PID: \(pid))"
+       // 2. DSH general fallback: inspect running process command if available
+       if clientName == "dsh" || session.cwd.contains(".dsh") {
+           if let pid = session.pid {
+               let cmd = fetchProcessCommand(pid: pid) ?? ""
+               if cmd.contains("DeepSeek Harness Desktop") {
+                   return "DSH Desktop (PID: \(pid))"
+               } else if cmd.contains("dsh web") || cmd.contains("dsh-web") {
+                   return "DSH Web (PID: \(pid))"
+               }
+               return "DSH Desktop (PID: \(pid))"
+           } else {
+               return "DSH Desktop"
+           }
+       }
+
+        // 3. Explicit Claude Code
+        if clientName == "claude" {
+            if let tty = session.tty, !tty.isEmpty {
+                if let pid = session.pid {
+                    return "Claude Code (\(tty), PID: \(pid))"
+                }
+                return "Claude Code (\(tty))"
+            } else if let pid = session.pid {
+                return "Claude Code (PID: \(pid))"
+            } else {
+                return "Claude Code"
             }
-            return tty
         }
 
-        // 3. DSH general fallback: inspect running process command if available
-        if clientName == "dsh" || session.cwd.contains(".dsh") {
+        // 4. Interactive terminal TTY (defaults to Claude Code if running in CLI shell)
+        if let tty = session.tty, !tty.isEmpty {
+            let label = (clientName == "codex") ? "Codex CLI" : "Claude Code"
             if let pid = session.pid {
-                let cmd = fetchProcessCommand(pid: pid) ?? ""
-                if cmd.contains("DeepSeek Harness Desktop") {
-                    return "DSH Desktop (PID: \(pid))"
-                } else if cmd.contains("dsh web") || cmd.contains("dsh-web") {
-                    return "DSH Web (PID: \(pid))"
-                }
-                return "DSH Desktop (PID: \(pid))"
-            } else {
-                return "DSH Desktop"
+                return "\(label) (\(tty), PID: \(pid))"
             }
+            return "\(label) (\(tty))"
         }
 
         if clientName == "claude" {
-            if let pid = session.pid {
+            if let tty = session.tty, !tty.isEmpty {
+                if let pid = session.pid {
+                    return "Claude Code (\(tty), PID: \(pid))"
+                }
+                return "Claude Code (\(tty))"
+            } else if let pid = session.pid {
                 return "Claude Code (PID: \(pid))"
             } else {
                 return "Claude Code"
@@ -441,9 +460,12 @@ final class DingTalkNotificationCoordinator {
 
     /// Normalizes an external display value and limits its size.
     private func safeValue(_ value: String, fallback: String) -> String {
-        let normalized = value
+        var normalized = value
             .components(separatedBy: .newlines)
             .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip any dangling HTML/XML tags
+        normalized = normalized.replacingOccurrences(of: #"</?[a-zA-Z0-9_\-]+(?:\s+[^>]*)?/?>"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return fallback }
         return String(normalized.prefix(100))
