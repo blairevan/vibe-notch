@@ -28,10 +28,16 @@
 | 2026-08-22 | `ConversationParser.swift` | 新增 `cleanUserPrompt` 方法，自动提取 `## My request:` 后的核心用户指令，并过滤系统注入的环境块（如 `<in-app-browser-context>`、`<recommended_plugins>` 等）。 | ✅ |
 | 2026-08-22 | `DingTalkNotificationCoordinatorTests.swift` | 增加新旧两套 Codex Rollout 格式的单元测试，涵盖 Prompt 提取与环境上下文清洗逻辑。 | ✅ |
 | 2026-08-22 | 运行时构建与部署 | 重新构建 Debug 版本并安全同步至 `/Applications/Vibe Notch.app`，重启应用进程（PID: 59998）。 | ✅ |
+| 2026-08-30 | `ConversationParser.swift` | 新增 Codex JSONL 终止态解析（`task_complete` 与 `error` 提取），支持识别上游 API 报错并提取错误消息。 | ✅ |
+| 2026-08-30 | `SessionStore.swift` | 在定时巡检（`recheckAllSessions`）与文件同步中增加主动终止态纠偏，修复因缺少 Hook 导致的 `processing` 状态滞留。 | ✅ |
+| 2026-08-30 | `DingTalkNotificationCoordinator.swift` | 增加「任务异常中断」与「异常信息」卡片分支排版，精准提示错误原因。 | ✅ |
+| 2026-08-30 | `SessionStore.swift` | 将后台会话状态定时巡检周期由 3 秒调优为 30 秒（`statusCheckIntervalSeconds = 30`），降低磁盘 I/O 开销。 | ✅ |
+| 2026-08-30 | 单元测试与部署验证 | 新增 Codex 报错 JSONL 解析与钉钉异常卡片格式化单测，全量 43 个单测全部通过；同步至 `/Applications/Vibe Notch.app` 并重启。 | ✅ |
 
 ### 2.2 验证结果
 
 - **单元测试**: 执行 `xcodebuild test -scheme ClaudeIsland -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`，全量 26 个测试用例全部通过（0 failure）。
+- **新增回归测试 (2026-08-30)**: 全量 43 个测试用例（包括 `testCodexRolloutErrorTaskCompleteParsing`、`testCodexActiveTaskStartedIsNotTurnCompleted`、`testDingTalkNotificationCoordinatorErrorTaskFormatting` 等）全部通过（0 failure）。
 - **真实数据验证**:
   - 真实多轮会话（以「长程任务 Demo」为例）查询成功返回用户重命名后的会话名称 `长程任务 Demo`，而非初始提问。
   - 会话日志中最新一轮 Prompt 成功解析为 `默认仅 1 小时有效，如果任务在1小时没有跑完，会怎样？`，而非 `未提供任务描述`。

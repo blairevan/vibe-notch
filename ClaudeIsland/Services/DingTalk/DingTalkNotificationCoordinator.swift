@@ -200,21 +200,26 @@ final class DingTalkNotificationCoordinator {
         let duration = formattedDuration(for: session)
         let terminalInfo = extractTerminalInfo(from: session)
         let timeString = formattedTime()
+        let hasError = session.conversationInfo.lastErrorMessage != nil && !session.conversationInfo.lastErrorMessage!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let title = hasError ? "Vibe Notch - Task Error" : "Vibe Notch - Task Completed"
+        let header = hasError ? "### ⚠️ Vibe Notch - 任务异常中断" : "### 🚀 Vibe Notch - 任务已完成"
+        let status = hasError ? "❌ 执行中断 (遇到错误)" : "✅ 执行完成 (等待输入)"
+        let resultHeader = hasError ? "**异常信息**" : "**最新结果**"
 
         return DingTalkMessage(
-            title: "Vibe Notch - Task Completed",
+            title: title,
             text: """
-            ### 🚀 Vibe Notch - 任务已完成
+            \(header)
 
             **项目与会话**
             - **项目**：`\(projectName)`
             - **主题**：\(subject)
-            - **状态**：✅ 执行完成 (等待输入)
+            - **状态**：\(status)
 
             **本轮任务**
             > \(prompt)
 
-            **最新结果**
+            \(resultHeader)
             > \(result)
 
             **执行详情**
@@ -325,6 +330,18 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts and formats the latest assistant response, keeping head 200 + tail 200 chars when > 400.
     private func extractResult(from session: SessionState) -> String {
+        if let err = session.conversationInfo.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !err.isEmpty {
+            let cleanErr = err.replacingOccurrences(of: "\r\n", with: "\n")
+            if cleanErr.count <= 400 {
+                return formatBlockquote(cleanErr)
+            } else {
+                let head = String(cleanErr.prefix(200))
+                let tail = String(cleanErr.suffix(200))
+                return formatBlockquote("\(head)\n...\n\(tail)")
+            }
+        }
+
         guard let lastMsg = session.conversationInfo.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
               !lastMsg.isEmpty else {
             return "已完成当前执行，等待进一步输入。"

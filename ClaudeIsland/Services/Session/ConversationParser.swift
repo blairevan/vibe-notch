@@ -32,7 +32,7 @@ struct UsageInfo: Equatable {
     }
 }
 
-struct ConversationInfo: Equatable {
+struct ConversationInfo: Sendable, Equatable {
     var summary: String? = nil
     var lastMessage: String? = nil
     var lastMessageRole: String? = nil  // "user", "assistant", or "tool"
@@ -42,8 +42,10 @@ struct ConversationInfo: Equatable {
     var usage: UsageInfo = UsageInfo()  // Token usage stats
     var lastUserMessage: String? = nil  // Latest user prompt in the current turn
     var clientName: String? = nil  // "claude", "codex", or "dsh"
+    var isTurnCompleted: Bool = false  // Whether the latest turn is completed
+    var lastErrorMessage: String? = nil  // Extracted error message if turn failed
 
-    init(
+    nonisolated init(
         summary: String? = nil,
         lastMessage: String? = nil,
         lastMessageRole: String? = nil,
@@ -52,7 +54,9 @@ struct ConversationInfo: Equatable {
         lastUserMessageDate: Date? = nil,
         usage: UsageInfo = UsageInfo(),
         lastUserMessage: String? = nil,
-        clientName: String? = nil
+        clientName: String? = nil,
+        isTurnCompleted: Bool = false,
+        lastErrorMessage: String? = nil
     ) {
         self.summary = summary
         self.lastMessage = lastMessage
@@ -63,6 +67,8 @@ struct ConversationInfo: Equatable {
         self.usage = usage
         self.lastUserMessage = lastUserMessage
         self.clientName = clientName
+        self.isTurnCompleted = isTurnCompleted
+        self.lastErrorMessage = lastErrorMessage
     }
 }
 
@@ -425,6 +431,23 @@ actor ConversationParser {
         return nil
     }
 
+    /// Extracts a readable error message from error JSON string or object
+    static func extractReadableErrorMessage(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = trimmed.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let errObj = json["error"] as? [String: Any] {
+                if let msg = errObj["message"] as? String {
+                    return extractReadableErrorMessage(msg)
+                }
+            }
+            if let msg = json["message"] as? String {
+                return extractReadableErrorMessage(msg)
+            }
+        }
+        return trimmed
+    }
+
     /// Parse Codex JSONL content
     private func parseCodexContent(_ content: String) -> ConversationInfo {
         let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -436,6 +459,9 @@ actor ConversationParser {
         var lastMessageRole: String?
         var lastToolName: String?
         var usage = UsageInfo()
+        var isTurnCompleted = false
+        var turnCompletionDetermined = false
+        var lastErrorMessage: String?
 
         // First user message
         for line in lines {
@@ -456,6 +482,27 @@ actor ConversationParser {
                 continue
             }
 
+            let type = json["type"] as? String
+
+            // Check turn completion status (look for task_complete or task_started)
+            if !turnCompletionDetermined {
+                if type == "event_msg",
+                   let payload = json["payload"] as? [String: Any] {
+                    let eventType = payload["type"] as? String
+                    if eventType == "task_complete" {
+                        isTurnCompleted = true
+                        turnCompletionDetermined = true
+                        if let errorObj = payload["error"] as? [String: Any],
+                           let errMsg = errorObj["message"] as? String {
+                            lastErrorMessage = Self.extractReadableErrorMessage(errMsg)
+                        }
+                    } else if eventType == "task_started" {
+                        isTurnCompleted = false
+                        turnCompletionDetermined = true
+                    }
+                }
+            }
+
             if lastUserMessage == nil {
                 if let userMsg = Self.extractCodexUserMessage(from: json) {
                     lastUserMessage = userMsg.text
@@ -463,7 +510,6 @@ actor ConversationParser {
                 }
             }
 
-            let type = json["type"] as? String
             if lastMessage == nil {
                 if type == "response_item",
                    let payload = json["payload"] as? [String: Any] {
@@ -507,9 +553,14 @@ actor ConversationParser {
                 }
             }
 
-            if lastUserMessage != nil && lastMessage != nil {
+            if lastUserMessage != nil && lastMessage != nil && turnCompletionDetermined {
                 break
             }
+        }
+
+        if lastMessage == nil, let err = lastErrorMessage {
+            lastMessage = "❌ 异常中断: \(err)"
+            lastMessageRole = "assistant"
         }
 
         return ConversationInfo(
@@ -520,7 +571,10 @@ actor ConversationParser {
             firstUserMessage: firstUserMessage,
             lastUserMessageDate: lastUserMessageDate,
             usage: usage,
-            lastUserMessage: lastUserMessage
+            lastUserMessage: lastUserMessage,
+            clientName: "codex",
+            isTurnCompleted: isTurnCompleted,
+            lastErrorMessage: lastErrorMessage
         )
     }
 

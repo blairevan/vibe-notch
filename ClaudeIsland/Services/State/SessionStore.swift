@@ -32,8 +32,8 @@ actor SessionStore {
     /// Periodic status check task
     private var statusCheckTask: Task<Void, Never>?
 
-    /// Status check interval (3 seconds)
-    private let statusCheckIntervalSeconds: UInt64 = 3
+    /// Status check interval (30 seconds)
+    private let statusCheckIntervalSeconds: UInt64 = 30
 
     // MARK: - Published State (for UI)
 
@@ -576,6 +576,11 @@ actor SessionStore {
         )
         session.conversationInfo = conversationInfo
 
+        if conversationInfo.isTurnCompleted && session.phase == .processing {
+            Self.logger.info("Session \(payload.sessionId.prefix(8), privacy: .public) turn completion reconciled in file update (hasError: \(conversationInfo.lastErrorMessage != nil, privacy: .public))")
+            session.phase = .waitingForInput
+        }
+
         // Handle /clear reconciliation - remove items that no longer exist in parser state
         if session.needsClearReconciliation {
             // Build set of valid IDs from the payload messages
@@ -1084,24 +1089,24 @@ actor SessionStore {
     }
 
     /// Recheck status of all active sessions
-    private func recheckAllSessions() {
-        var removedSession = false
+    private func recheckAllSessions() async {
+        var stateChanged = false
 
-        for (sessionId, session) in Array(sessions) {
+        for (sessionId, var session) in Array(sessions) {
             if session.phase == .ended {
                 sessions.removeValue(forKey: sessionId)
                 cancelPendingSync(sessionId: sessionId)
-                removedSession = true
+                stateChanged = true
                 continue
             }
 
             if let pid = session.pid {
                 let isRunning = isProcessRunning(pid: pid)
                 if !isRunning {
-                    Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8))")
+                    Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8), privacy: .public)")
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
-                    removedSession = true
+                    stateChanged = true
                     continue
                 }
             }
@@ -1115,10 +1120,24 @@ actor SessionStore {
             }
             if needsSync {
                 scheduleFileSync(sessionId: sessionId, cwd: session.cwd)
+
+                // Active file check to detect turn completion/failure in case hooks were missed
+                let convInfo = await ConversationParser.shared.parse(
+                    sessionId: sessionId,
+                    cwd: session.cwd
+                )
+                session.conversationInfo = convInfo
+
+                if convInfo.isTurnCompleted && session.phase == .processing {
+                    Self.logger.info("Session \(sessionId.prefix(8), privacy: .public) turn completion detected via file check (hasError: \(convInfo.lastErrorMessage != nil, privacy: .public))")
+                    session.phase = .waitingForInput
+                    sessions[sessionId] = session
+                    stateChanged = true
+                }
             }
         }
 
-        if removedSession {
+        if stateChanged {
             publishState()
         }
     }

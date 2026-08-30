@@ -308,6 +308,96 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(info.lastMessageRole, "assistant")
     }
 
+    /// Verifies parsing a Codex rollout when a turn terminates with task_complete containing an upstream error.
+    func testCodexRolloutErrorTaskCompleteParsing() async {
+        let jsonl = [
+            "{\"type\":\"session_meta\",\"payload\":{\"cli_version\":\"0.151.0-alpha.7.1\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"UserMessage\",\"content\":[{\"type\":\"text\",\"text\":\"## My request:\\n增加移动端适配\"}]}}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"last_agent_message\":null,\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"Provider error 400: Antigravity invalid request: Function call is missing a thought_signature in functionCall parts.\\\",\\\"type\\\":\\\"upstream_error\\\"}}\"}}}"
+        ].joined(separator: "\n")
+
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isCodex: true)
+        XCTAssertEqual(info.lastUserMessage, "增加移动端适配")
+        XCTAssertTrue(info.isTurnCompleted)
+        XCTAssertNotNil(info.lastErrorMessage)
+        XCTAssertTrue(info.lastErrorMessage?.contains("Provider error 400") ?? false)
+        XCTAssertTrue(info.lastMessage?.contains("❌ 异常中断") ?? false)
+    }
+
+    /// Verifies that an ongoing turn with task_started is not marked as isTurnCompleted.
+    func testCodexActiveTaskStartedIsNotTurnCompleted() async {
+        let jsonl = [
+            "{\"type\":\"session_meta\",\"payload\":{\"cli_version\":\"0.151.0-alpha.7.1\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\",\"last_agent_message\":\"第一轮完成\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-2\"}}",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"UserMessage\",\"content\":[{\"type\":\"text\",\"text\":\"## My request:\\n搞定了吗？\"}]}}}"
+        ].joined(separator: "\n")
+
+        let info = await ConversationParser.shared.parseContentForTesting(jsonl, isCodex: true)
+        XCTAssertEqual(info.lastUserMessage, "搞定了吗？")
+        XCTAssertFalse(info.isTurnCompleted)
+    }
+
+    /// Verifies DingTalk notification formatting for a task ended with an error.
+    func testDingTalkNotificationCoordinatorErrorTaskFormatting() async {
+        let recorder = MessageRecorder()
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(),
+            isEnabled: { true },
+            now: { Date(timeIntervalSince1970: 1_700_000_000) },
+            send: recorder.send
+        )
+
+        let processingSession = SessionState(
+            sessionId: "session-err-1",
+            cwd: "/opt/app/aitools/toolhub",
+            projectName: "toolhub",
+            phase: .processing,
+            conversationInfo: ConversationInfo(
+                summary: "移动端适配",
+                lastMessage: nil,
+                lastMessageRole: nil,
+                firstUserMessage: "增加移动端适配",
+                lastUserMessageDate: Date(timeIntervalSince1970: 1_700_000_000),
+                lastUserMessage: "增加移动端适配",
+                clientName: "codex",
+                isTurnCompleted: false,
+                lastErrorMessage: nil
+            )
+        )
+
+        let errorSession = SessionState(
+            sessionId: "session-err-1",
+            cwd: "/opt/app/aitools/toolhub",
+            projectName: "toolhub",
+            phase: .waitingForInput,
+            conversationInfo: ConversationInfo(
+                summary: "移动端适配",
+                lastMessage: "❌ 异常中断: Provider error 400",
+                lastMessageRole: "assistant",
+                firstUserMessage: "增加移动端适配",
+                lastUserMessageDate: Date(timeIntervalSince1970: 1_700_000_000),
+                lastUserMessage: "增加移动端适配",
+                clientName: "codex",
+                isTurnCompleted: true,
+                lastErrorMessage: "Provider error 400: Antigravity invalid request"
+            )
+        )
+
+        await coordinator.processSnapshot([processingSession])
+        await coordinator.processSnapshot([errorSession])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+        if let msg = recorder.messages.first {
+            XCTAssertEqual(msg.title, "Vibe Notch - Task Error")
+            XCTAssertTrue(msg.text.contains("### ⚠️ Vibe Notch - 任务异常中断"))
+            XCTAssertTrue(msg.text.contains("❌ 执行中断 (遇到错误)"))
+            XCTAssertTrue(msg.text.contains("**异常信息**"))
+            XCTAssertTrue(msg.text.contains("Provider error 400: Antigravity invalid request"))
+        }
+    }
+
     func testLegacyCodexRolloutMessageParsing() async {
         let jsonl = """
         {"type":"session_meta","payload":{"cli_version":"0.148.0-alpha.15"}}
