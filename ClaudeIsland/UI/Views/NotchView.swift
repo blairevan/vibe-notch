@@ -440,7 +440,8 @@ struct NotchView: View {
             }
 
             // Open notch if terminal is not visible
-            if viewModel.status == .closed &&
+            if AppSettings.showPopupOnPermissionRequest &&
+               viewModel.status == .closed &&
                !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
                 viewModel.notchOpen(reason: .notification)
             }
