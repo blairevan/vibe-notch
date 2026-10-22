@@ -43,6 +43,7 @@ struct ConversationInfo: Sendable, Equatable {
     var lastUserMessage: String? = nil  // Latest user prompt in the current turn
     var clientName: String? = nil  // "claude", "codex", or "dsh"
     var isTurnCompleted: Bool = false  // Whether the latest turn is completed
+    var isSubagent: Bool = false  // Whether this conversation is a subagent turn
     var lastErrorMessage: String? = nil  // Extracted error message if turn failed
 
     nonisolated init(
@@ -56,6 +57,7 @@ struct ConversationInfo: Sendable, Equatable {
         lastUserMessage: String? = nil,
         clientName: String? = nil,
         isTurnCompleted: Bool = false,
+        isSubagent: Bool = false,
         lastErrorMessage: String? = nil
     ) {
         self.summary = summary
@@ -68,6 +70,7 @@ struct ConversationInfo: Sendable, Equatable {
         self.lastUserMessage = lastUserMessage
         self.clientName = clientName
         self.isTurnCompleted = isTurnCompleted
+        self.isSubagent = isSubagent
         self.lastErrorMessage = lastErrorMessage
     }
 }
@@ -462,12 +465,22 @@ actor ConversationParser {
         var isTurnCompleted = false
         var turnCompletionDetermined = false
         var lastErrorMessage: String?
+        var isSubagent = false
 
-        // First user message
+        // First user message & session metadata
         for line in lines {
             guard let lineData = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
                 continue
+            }
+            if json["type"] as? String == "session_meta",
+               let payload = json["payload"] as? [String: Any] {
+                if (payload["thread_source"] as? String) == "subagent" || payload["parent_thread_id"] != nil {
+                    isSubagent = true
+                }
+                if let sourceDict = payload["source"] as? [String: Any], sourceDict["subagent"] != nil {
+                    isSubagent = true
+                }
             }
             if let userMsg = Self.extractCodexUserMessage(from: json) {
                 firstUserMessage = Self.truncateMessage(userMsg.text, maxLength: 80)
@@ -574,6 +587,7 @@ actor ConversationParser {
             lastUserMessage: lastUserMessage,
             clientName: "codex",
             isTurnCompleted: isTurnCompleted,
+            isSubagent: isSubagent,
             lastErrorMessage: lastErrorMessage
         )
     }

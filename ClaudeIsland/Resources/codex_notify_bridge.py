@@ -45,6 +45,34 @@ def is_codex_turn_completed(session_id, home):
         log(f"Error checking turn completion: {e}")
     return True
 
+def is_codex_subagent(session_id, home):
+    sessions_dir = os.path.join(home, ".codex", "sessions")
+    if not os.path.exists(sessions_dir):
+        return False
+    files = glob.glob(os.path.join(sessions_dir, "**", f"*{session_id}*.jsonl"), recursive=True)
+    if not files:
+        return False
+    target_file = max(files, key=os.path.getmtime)
+    try:
+        with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if '"session_meta"' in line:
+                    try:
+                        d = json.loads(line)
+                        if d.get("type") == "session_meta":
+                            payload = d.get("payload", {})
+                            if payload.get("thread_source") == "subagent" or payload.get("parent_thread_id"):
+                                return True
+                            source = payload.get("source")
+                            if isinstance(source, dict) and "subagent" in source:
+                                return True
+                            return False
+                    except Exception:
+                        pass
+    except Exception as e:
+        log(f"Error checking subagent: {e}")
+    return False
+
 def main():
     home = os.path.expanduser("~")
     session_id = None
@@ -63,6 +91,13 @@ def main():
                             log("Ignoring internal background title-generation turn.")
                             return
                     
+                    if (data.get("thread-source") == "subagent" or
+                        data.get("thread_source") == "subagent" or
+                        data.get("parent-thread-id") or
+                        data.get("parent_thread_id")):
+                        log("Ignoring subagent turn from notify payload.")
+                        return
+
                     session_id = data.get("thread-id") or data.get("thread_id") or data.get("session-id")
                     cwd = data.get("cwd") or home
                     break
@@ -75,18 +110,30 @@ def main():
         if os.path.exists(sessions_dir):
             files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
             if files:
-                latest_file = max(files, key=os.path.getmtime)
-                try:
-                    with open(latest_file, "r") as f:
-                        for line in f:
-                            data = json.loads(line)
-                            if data.get("type") == "session_meta":
-                                session_id = data.get("payload", {}).get("session_id")
-                                break
-                except Exception as e:
-                    log(f"Error reading session file: {e}")
+                sorted_files = sorted(files, key=os.path.getmtime, reverse=True)
+                for candidate_file in sorted_files[:10]:
+                    try:
+                        with open(candidate_file, "r", encoding="utf-8", errors="ignore") as f:
+                            first_line = f.readline()
+                            if '"session_meta"' in first_line:
+                                data = json.loads(first_line)
+                                if data.get("type") == "session_meta":
+                                    payload = data.get("payload", {})
+                                    if payload.get("thread_source") == "subagent" or payload.get("parent_thread_id"):
+                                        continue
+                                    source = payload.get("source")
+                                    if isinstance(source, dict) and "subagent" in source:
+                                        continue
+                                    session_id = payload.get("session_id") or payload.get("id")
+                                    break
+                    except Exception as e:
+                        log(f"Error reading session file {candidate_file}: {e}")
 
     if session_id:
+        if is_codex_subagent(session_id, home):
+            log(f"Session {session_id} is a subagent turn, ignoring.")
+            return
+
         if not is_codex_turn_completed(session_id, home):
             log(f"Session {session_id} turn still in progress (latest event is not task_complete), ignoring turn-ended notify.")
             return

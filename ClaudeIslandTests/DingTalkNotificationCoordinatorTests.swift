@@ -651,6 +651,48 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         }
     }
 
+    /// Verifies that Codex subagent completions are suppressed and do not notify.
+    func testCodexSubagentDoesNotNotify() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        var session = makeSession(phase: .processing)
+        session.conversationInfo.clientName = "codex"
+        session.conversationInfo.isTurnCompleted = true
+        session.conversationInfo.isSubagent = true
+
+        await coordinator.processSnapshot([session])
+
+        var sessionCompleted = session
+        sessionCompleted.phase = .waitingForInput
+        await coordinator.processSnapshot([sessionCompleted])
+
+        XCTAssertTrue(recorder.messages.isEmpty, "Subagent turn completion must not trigger DingTalk notification")
+    }
+
+    /// Verifies ConversationParser parses subagent metadata from Codex session_meta.
+    func testConversationParserDetectsCodexSubagent() async {
+        let subagentJSONL = """
+        {"timestamp":"2026-10-22T07:29:28.533Z","ordinal":0,"type":"session_meta","payload":{"id":"child-1","session_id":"parent-1","parent_thread_id":"parent-1","thread_source":"subagent"}}
+        {"timestamp":"2026-10-22T07:29:28.536Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started"}}
+        {"timestamp":"2026-10-22T07:29:30.000Z","ordinal":2,"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"子任务Prompt"}]}}
+        {"timestamp":"2026-10-22T07:30:41.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete"}}
+        """
+        let subagentInfo = await ConversationParser.shared.parseContentForTesting(subagentJSONL, isCodex: true)
+        XCTAssertTrue(subagentInfo.isSubagent)
+        XCTAssertTrue(subagentInfo.isTurnCompleted)
+
+        let topLevelJSONL = """
+        {"timestamp":"2026-10-22T07:29:28.533Z","ordinal":0,"type":"session_meta","payload":{"id":"top-1","session_id":"top-1","thread_source":"user"}}
+        {"timestamp":"2026-10-22T07:29:28.536Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started"}}
+        {"timestamp":"2026-10-22T07:29:30.000Z","ordinal":2,"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"主任务Prompt"}]}}
+        {"timestamp":"2026-10-22T07:30:41.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete"}}
+        """
+        let topLevelInfo = await ConversationParser.shared.parseContentForTesting(topLevelJSONL, isCodex: true)
+        XCTAssertFalse(topLevelInfo.isSubagent)
+        XCTAssertTrue(topLevelInfo.isTurnCompleted)
+    }
+
         /// Creates a coordinator with deterministic credentials, time, and transport.
     private func makeCoordinator(
         recorder: MessageRecorder,

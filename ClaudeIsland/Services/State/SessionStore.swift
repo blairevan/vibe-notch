@@ -172,6 +172,11 @@ actor SessionStore {
             if convInfo.clientName == "codex" && !convInfo.isTurnCompleted {
                 Self.logger.info("Codex session \(sessionId.prefix(8), privacy: .public) turn still in progress according to JSONL, maintaining processing phase")
                 session.phase = .processing
+            } else if convInfo.clientName == "codex" && convInfo.isSubagent {
+                Self.logger.info("Codex session \(sessionId.prefix(8), privacy: .public) is a subagent, dropping from active top-level sessions")
+                sessions.removeValue(forKey: sessionId)
+                cancelPendingSync(sessionId: sessionId)
+                return
             }
         }
 

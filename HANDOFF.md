@@ -217,3 +217,20 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 | 2026-08-29 | DingTalkNotificationCoordinatorTests.swift | 新增 testClaudeCommandTagCleaning 单测，更新终端断言，全量 40 个测试用例全部通过。 | ✅ |
 
 | 2026-08-29 17:55:00 | Assistant | 完成 Claude Code 终端标识友好化展示与 XML 标签深度清洗，完成本地及 Mac mini 部署。 |
+
+---
+
+## 2.12 2026-10-22 Codex Subagent 内部轮次完成通知过滤
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-10-22 | codex_notify_bridge.py | 增加 is_codex_subagent 判定与载荷过滤，阻断子代理内部任务结束时向状态服务发送完成信号。 | ✅ |
+| 2026-10-22 | ConversationParser.swift | 在 ConversationInfo 中扩展 isSubagent 字段，并在 parseCodexContent 时提取 session_meta 标记。 | ✅ |
+| 2026-10-22 | DingTalkNotificationCoordinator.swift | 增加 isSubagent 防火墙，彻底阻断子代理触发钉钉任务完成通知。 | ✅ |
+| 2026-10-22 | SessionStore.swift | 识别 Codex 子代理会话并从顶层活跃会话列表中清理，避免状态栏常驻冗余项。 | ✅ |
+| 2026-10-22 | DingTalkNotificationCoordinatorTests.swift | 新增 testCodexSubagentDoesNotNotify 与 testConversationParserDetectsCodexSubagent 单测，全量 47 测试通过。 | ✅ |
+| 2026-10-22 | 双机部署 | 完成本地与 Mac mini 双端 Release 产物及 bridge 脚本同步，并重启生效。 | ✅ |
+
+| 2026-10-22 16:05:00 | Assistant | 完成 Codex Subagent 内部任务完成通知过滤，全量单测通过并完成双机同步热部署。 |

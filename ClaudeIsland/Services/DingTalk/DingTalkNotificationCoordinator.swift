@@ -102,6 +102,8 @@ final class DingTalkNotificationCoordinator {
                // If an ongoing turn (task_started without task_complete) exists, it is not a turn end.
                if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
                    isCompletion = false
+               } else if session.conversationInfo.isSubagent {
+                   isCompletion = false
                // Compaction recovery can briefly expose the pre-compaction
                // assistant response as a waiting state. Suppress if the assistant result has not changed.
                } else if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
