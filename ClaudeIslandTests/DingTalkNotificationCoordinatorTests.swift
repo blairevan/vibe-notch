@@ -171,6 +171,73 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(recorder.messages.count, 1)
     }
 
+    /// Verifies context compaction where user message changed but assistant message is still pre-compaction does not notify.
+    func testContextCompactionWithUpdatedUserMessageDoesNotNotifyIntermediateState() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        var session1 = makeSession(phase: .processing)
+        session1.conversationInfo.lastUserMessage = "确认"
+        session1.conversationInfo.lastMessage = "旧的助手提示"
+        await coordinator.processSnapshot([session1])
+
+        session1.phase = .compacting
+        await coordinator.processSnapshot([session1])
+
+        session1.phase = .processing
+        await coordinator.processSnapshot([session1])
+
+        // When recovered into waitingForInput, user prompt was updated to 'y', but assistant has not emitted a new reply
+        var recoveredSession = session1
+        recoveredSession.phase = .waitingForInput
+        recoveredSession.conversationInfo.lastUserMessage = "y"
+        recoveredSession.conversationInfo.lastMessage = "旧的助手提示"
+        await coordinator.processSnapshot([recoveredSession])
+
+        XCTAssertTrue(recorder.messages.isEmpty)
+
+        // Once new response is produced, it notifies
+        var finalSession = recoveredSession
+        finalSession.phase = .processing
+        finalSession.conversationInfo.lastMessage = "新的执行结果"
+        await coordinator.processSnapshot([finalSession])
+        finalSession.phase = .waitingForInput
+        await coordinator.processSnapshot([finalSession])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+    }
+
+    /// Verifies that Codex sessions with ongoing turns (isTurnCompleted == false) do not trigger task completion notifications.
+    func testCodexActiveTaskStartedDoesNotNotifyCompletion() async {
+        let recorder = MessageRecorder()
+        let coordinator = makeCoordinator(recorder: recorder)
+
+        var codexSession = makeSession(phase: .processing)
+        codexSession.conversationInfo.clientName = "codex"
+        codexSession.conversationInfo.isTurnCompleted = false
+        codexSession.conversationInfo.lastUserMessage = "执行任务"
+        codexSession.conversationInfo.lastMessage = "之前的结果"
+        await coordinator.processSnapshot([codexSession])
+
+        // Erroneously enters waitingForInput while turn is not completed
+        codexSession.phase = .waitingForInput
+        await coordinator.processSnapshot([codexSession])
+
+        XCTAssertTrue(recorder.messages.isEmpty)
+
+        // Now turn actually completes
+        codexSession.phase = .processing
+        codexSession.conversationInfo.isTurnCompleted = true
+        codexSession.conversationInfo.lastMessage = "任务已真正完成"
+        await coordinator.processSnapshot([codexSession])
+
+        codexSession.phase = .waitingForInput
+        await coordinator.processSnapshot([codexSession])
+
+        XCTAssertEqual(recorder.messages.count, 1)
+        XCTAssertTrue(recorder.messages[0].text.contains("任务已真正完成"))
+    }
+
     /// Verifies messages include rich safe context and blockquoted summaries.
     func testMessageContainsProjectNameAndRichFields() async {
         let recorder = MessageRecorder()

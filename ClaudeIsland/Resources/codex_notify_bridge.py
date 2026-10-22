@@ -19,6 +19,32 @@ def log(msg):
     except Exception:
         pass
 
+def is_codex_turn_completed(session_id, home):
+    sessions_dir = os.path.join(home, ".codex", "sessions")
+    if not os.path.exists(sessions_dir):
+        return True
+    files = glob.glob(os.path.join(sessions_dir, "**", f"*{session_id}*.jsonl"), recursive=True)
+    if not files:
+        return True
+    target_file = max(files, key=os.path.getmtime)
+    try:
+        with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+            for line in reversed(f.readlines()):
+                if '"task_complete"' in line or '"task_started"' in line:
+                    try:
+                        d = json.loads(line)
+                        if d.get("type") == "event_msg":
+                            pt = d.get("payload", {}).get("type")
+                            if pt == "task_complete":
+                                return True
+                            elif pt == "task_started":
+                                return False
+                    except Exception:
+                        pass
+    except Exception as e:
+        log(f"Error checking turn completion: {e}")
+    return True
+
 def main():
     home = os.path.expanduser("~")
     session_id = None
@@ -61,6 +87,10 @@ def main():
                     log(f"Error reading session file: {e}")
 
     if session_id:
+        if not is_codex_turn_completed(session_id, home):
+            log(f"Session {session_id} turn still in progress (latest event is not task_complete), ignoring turn-ended notify.")
+            return
+
         log(f"Resolved active Codex session: {session_id}")
         hook_script = os.path.join(home, ".codex", "hooks", "claude-island-state.py")
         if not os.path.exists(hook_script):

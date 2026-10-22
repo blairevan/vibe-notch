@@ -98,16 +98,20 @@ final class DingTalkNotificationCoordinator {
            case (.processing, .waitingForInput),
                 (.compacting, .waitingForInput),
                 (.waitingForApproval, .waitingForInput):
+               // For Codex sessions: verify with the session's authoritative isTurnCompleted flag.
+               // If an ongoing turn (task_started without task_complete) exists, it is not a turn end.
+               if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
+                   isCompletion = false
                // Compaction recovery can briefly expose the pre-compaction
-               // assistant response as a waiting state. It is not a turn end.
-               if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
-                   baseline == fingerprint {
-                    isCompletion = false
-                } else if lastNotifiedCompletions[session.sessionId] == fingerprint {
-                    isCompletion = false
-                } else {
-                    isCompletion = fingerprint.hasUserContent
-                }
+               // assistant response as a waiting state. Suppress if the assistant result has not changed.
+               } else if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
+                   baseline == fingerprint || (baseline.lastMessage != nil && baseline.lastMessage == fingerprint.lastMessage) {
+                   isCompletion = false
+               } else if lastNotifiedCompletions[session.sessionId] == fingerprint {
+                   isCompletion = false
+               } else {
+                   isCompletion = fingerprint.hasUserContent
+               }
             default:
                 isCompletion = false
             }

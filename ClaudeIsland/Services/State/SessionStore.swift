@@ -142,21 +142,37 @@ actor SessionStore {
 
         let newPhase = event.determinePhase()
 
-        if session.phase.canTransition(to: newPhase) {
-            session.phase = newPhase
+        // Ignore SessionStart transition to waitingForInput if session is already actively running or compacting
+        let effectivePhase: SessionPhase
+        if event.event == "SessionStart" && (session.phase == .processing || session.phase == .compacting) {
+            Self.logger.info("Ignoring SessionStart waitingForInput for active/compacting session \(sessionId.prefix(8), privacy: .public)")
+            effectivePhase = session.phase
         } else {
-            Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
+            effectivePhase = newPhase
+        }
+
+        if session.phase.canTransition(to: effectivePhase) {
+            session.phase = effectivePhase
+        } else {
+            Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: effectivePhase), privacy: .public), ignoring")
         }
 
         // Whenever transitioning to processing or user submits prompt, track turn start time
-        if event.event == "UserPromptSubmit" || (newPhase == .processing && session.turnStartTime == nil) {
+        if event.event == "UserPromptSubmit" || (effectivePhase == .processing && session.turnStartTime == nil) {
             session.turnStartTime = Date()
         }
 
         // When transition to waitingForInput or finished, update conversation info immediately
-        if newPhase == .waitingForInput {
+        if session.phase == .waitingForInput {
             let convInfo = await ConversationParser.shared.parse(sessionId: sessionId, cwd: session.cwd)
             session.conversationInfo = convInfo
+
+            // For Codex sessions: if the conversation file indicates turn is still in progress (task_started without task_complete),
+            // reconcile back to processing and do NOT treat as waitingForInput.
+            if convInfo.clientName == "codex" && !convInfo.isTurnCompleted {
+                Self.logger.info("Codex session \(sessionId.prefix(8), privacy: .public) turn still in progress according to JSONL, maintaining processing phase")
+                session.phase = .processing
+            }
         }
 
         if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
