@@ -220,6 +220,14 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 
 ---
 
+## 2.13 2026-10-23 Codex 审批策略对齐
+
+- 从最新 `turn_context` 或 `thread_settings_applied` 读取会话审批策略；明确为 `never` 时抑制等待审批状态及钉钉通知。
+- 对被抑制的请求返回 `ask`，交回宿主处理，不替用户批准或拒绝工具；未知策略保留既有处理。
+- 回归：`xcodebuild test -scheme ClaudeIsland -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`，48 项测试通过；Release 构建通过。
+- 边界：尚未完成真实 Codex 交互审批的端到端验收；本次不是所有审批事件的宿主状态同步方案。
+- 修订记录：2026-10-23，新增会话级审批策略识别与免审批通知抑制。
+
 ## 2.12 2026-10-22 Codex Subagent 内部轮次完成通知过滤
 
 ### 变更明细

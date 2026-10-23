@@ -140,6 +140,22 @@ actor SessionStore {
             return
         }
 
+        // Resolve the effective session policy before treating a hook as user-facing approval.
+        if event.expectsResponse || event.event == "PermissionRequest" {
+            session.conversationInfo = await ConversationParser.shared.parse(sessionId: sessionId, cwd: session.cwd)
+            if !session.conversationInfo.allowsApprovalNotification {
+                // Do not authorize the tool: return control to Codex's own permission handling.
+                if let toolUseId = event.toolUseId {
+                    await MainActor.run {
+                        HookSocketServer.shared.respondToPermission(toolUseId: toolUseId, decision: "ask")
+                    }
+                }
+                session.phase = .processing
+                sessions[sessionId] = session
+                return
+            }
+        }
+
         let newPhase = event.determinePhase()
 
         // Ignore SessionStart transition to waitingForInput if session is already actively running or compacting

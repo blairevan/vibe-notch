@@ -651,6 +651,25 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         }
     }
 
+    /// A session's latest approval policy must override older never-policy turns.
+    func testCodexApprovalPolicyControlsPermissionNotification() async {
+        for (policy, expectedCount) in [("never", 0), ("on-request", 1)] {
+            let recorder = MessageRecorder()
+            let coordinator = makeCoordinator(recorder: recorder)
+            let content = """
+            {"type":"turn_context","payload":{"approval_policy":"never"}}
+            {"type":"turn_context","payload":{"approval_policy":"\(policy)"}}
+            """
+            let info = await ConversationParser.shared.parseContentForTesting(content, isCodex: true)
+            var session = makeSession(phase: .processing)
+            session.conversationInfo = info
+            await coordinator.processSnapshot([session])
+            session.phase = makePermissionSession(toolUseId: "policy-test").phase
+            await coordinator.processSnapshot([session])
+            XCTAssertEqual(recorder.messages.count, expectedCount, "Policy: \(policy)")
+        }
+    }
+
     /// Verifies that Codex subagent completions are suppressed and do not notify.
     func testCodexSubagentDoesNotNotify() async {
         let recorder = MessageRecorder()

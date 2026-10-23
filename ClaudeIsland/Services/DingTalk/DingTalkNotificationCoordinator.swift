@@ -133,7 +133,8 @@ final class DingTalkNotificationCoordinator {
                messages.append(taskCompletedMessage(for: session))
            }
 
-            if case .waitingForApproval(let toolUseId) = currentPhase {
+            if case .waitingForApproval(let toolUseId) = currentPhase,
+               session.conversationInfo.allowsApprovalNotification {
                 var sessionIds = notifiedPermissionIds[session.sessionId] ?? []
                 if sessionIds.insert(toolUseId).inserted {
                     messages.append(permissionMessage(for: session))

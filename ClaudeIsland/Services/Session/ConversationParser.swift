@@ -44,6 +44,12 @@ struct ConversationInfo: Sendable, Equatable {
     var clientName: String? = nil  // "claude", "codex", or "dsh"
     var isTurnCompleted: Bool = false  // Whether the latest turn is completed
     var isSubagent: Bool = false  // Whether this conversation is a subagent turn
+    var approvalPolicy: String? = nil  // Effective policy from the latest Codex turn/settings
+
+    /// Whether a hook may represent an interactive approval for this conversation.
+    var allowsApprovalNotification: Bool {
+        clientName != "codex" || approvalPolicy != "never"
+    }
     var lastErrorMessage: String? = nil  // Extracted error message if turn failed
 
     nonisolated init(
@@ -576,7 +582,24 @@ actor ConversationParser {
             lastMessageRole = "assistant"
         }
 
-        return ConversationInfo(
+        var approvalPolicy: String?
+        for line in lines.reversed() {
+            guard let data = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let payload = json["payload"] as? [String: Any] else { continue }
+            if json["type"] as? String == "turn_context" {
+                approvalPolicy = payload["approval_policy"] as? String
+                break
+            }
+            if json["type"] as? String == "event_msg",
+               payload["type"] as? String == "thread_settings_applied",
+               let settings = payload["thread_settings"] as? [String: Any] {
+                approvalPolicy = settings["approval_policy"] as? String
+                break
+            }
+        }
+
+        var info = ConversationInfo(
             summary: firstUserMessage,
             lastMessage: lastMessage,
             lastMessageRole: lastMessageRole,
@@ -590,6 +613,8 @@ actor ConversationParser {
             isSubagent: isSubagent,
             lastErrorMessage: lastErrorMessage
         )
+        info.approvalPolicy = approvalPolicy
+        return info
     }
 
     /// Parse JSONL content
