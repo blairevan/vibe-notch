@@ -5,6 +5,129 @@ import XCTest
 /// Verifies DingTalk notifications derived from unified session snapshots.
 @MainActor
 final class DingTalkNotificationCoordinatorTests: XCTestCase {
+    /// Repeated permission snapshots must not restart an exhausted retry budget.
+    func testFailedPermissionDoesNotRetryOnEverySnapshot() async {
+        var attempts = 0
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in attempts += 1; throw DingTalkClientError.httpStatus(503) },
+            sleep: { _ in }
+        )
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makePermissionSession(toolUseId: "limited")])
+        await coordinator.processSnapshot([makePermissionSession(toolUseId: "limited")])
+        XCTAssertEqual(attempts, 4)
+    }
+
+    /// Exhausted transient delivery stops after four attempts with bounded backoff.
+    func testRetryBudgetIsBounded() async {
+        var attempts = 0
+        var delays: [UInt64] = []
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in attempts += 1; throw DingTalkClientError.httpStatus(503) },
+            sleep: { delays.append($0) }
+        )
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(attempts, 4)
+        XCTAssertEqual(delays, [2_000_000_000, 5_000_000_000, 15_000_000_000])
+    }
+
+    /// Another completion transition during backoff cannot enqueue the same delivery.
+    func testInFlightCompletionIsDeduplicated() async {
+        var attempts = 0
+        var coordinator: DingTalkNotificationCoordinator?
+        coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in
+                attempts += 1
+                if attempts == 1 { throw DingTalkClientError.httpStatus(503) }
+            },
+            sleep: { _ in
+                await coordinator?.processSnapshot([self.makeSession(phase: .processing)])
+                await coordinator?.processSnapshot([self.makeSession(phase: .waitingForInput)])
+            }
+        )
+        await coordinator?.processSnapshot([makeSession(phase: .processing)])
+        await coordinator?.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(attempts, 2)
+        coordinator = nil
+    }
+
+    /// Stopping while waiting prevents all subsequent retry attempts.
+    func testStopCancelsRetry() async {
+        var attempts = 0
+        var coordinator: DingTalkNotificationCoordinator?
+        coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in attempts += 1; throw DingTalkClientError.httpStatus(503) },
+            sleep: { _ in coordinator?.stop() }
+        )
+        await coordinator?.processSnapshot([makeSession(phase: .processing)])
+        await coordinator?.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(attempts, 1)
+        coordinator = nil
+    }
+
+    /// HTTP rate limiting must honor the server's retry-after instead of early retrying.
+    func testRateLimitHonorsRetryAfter() async {
+        var requests = 0
+        var delays: [UInt64] = []
+        let client = DingTalkClient(transport: { request in
+            requests += 1
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url), statusCode: requests == 1 ? 429 : 200,
+                httpVersion: nil, headerFields: ["Retry-After": "30"]
+            ))
+            return (Data(#"{"errcode":0,"errmsg":"ok"}"#.utf8), response)
+        })
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { try await client.send($0, credentials: $1) },
+            sleep: { delays.append($0) }
+        )
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(delays, [30_000_000_000])
+    }
+
+    /// A transient send failure must be retried without another completion event.
+    func testTransientFailureRetriesCompletion() async {
+        var attempts = 0
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in
+                attempts += 1
+                if attempts == 1 { throw DingTalkClientError.transport(code: -1005) }
+            }
+        )
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(attempts, 2, "One failed attempt plus one success; later duplicates stay suppressed")
+    }
+
+    /// Failed delivery must not create a successful completion fingerprint.
+    func testFailedCompletionCanBeSentOnLaterTransition() async {
+        var attempts = 0
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: TestCredentialStore(), isEnabled: { true },
+            send: { _, _ in
+                attempts += 1
+                if attempts == 1 { throw DingTalkClientError.httpStatus(401) }
+            }
+        )
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        await coordinator.processSnapshot([makeSession(phase: .processing)])
+        await coordinator.processSnapshot([makeSession(phase: .waitingForInput)])
+        XCTAssertEqual(attempts, 2)
+    }
+
     /// Verifies the initial snapshot seeds state without notifying.
     func testInitialWaitingSnapshotDoesNotNotify() async {
         let recorder = MessageRecorder()

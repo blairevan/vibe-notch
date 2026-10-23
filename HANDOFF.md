@@ -220,6 +220,16 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 
 ---
 
+## 2.14 2026-10-23 钉钉直连与有界重试
+
+- 开发分支：`codex/dingtalk-reliable-delivery`；交付目标为合入 `main` 并复制已签名 Release 到 Mac mini。
+- 钉钉使用专用 ephemeral URLSession，关闭 HTTP/HTTPS/SOCKS/PAC/自动发现代理，不修改系统代理；仓库没有 Telegram 发送实现，本次不添加或修改 TG。
+- 成功返回后记录完成/审批去重；发送中单独去重，失败不标记成功。
+- 临时网络错误、HTTP 5xx/429 最多重试三次（首次发送加三次重试），间隔 2、5、15 秒；Retry-After 支持秒数及 HTTP 日期，超过 300 秒不自动重试。业务错误、鉴权错误及取消不自动重试。
+- 审批重试耗尽后记录失败状态，避免相同快照重新启动重试；stop/关闭开关阻止后续重试。失败完成事件可在后续完成状态转换再次尝试，不做持久化补发。
+- 验证：56 项 XCTest 通过（含重试上限、成功后去重、失败后再次发送、重试中重复事件、stop、限流等待与直连配置）。真实钉钉网络投递及系统 TUN/VPN 路由未做端到端验证；专用 URLSession 不绕过系统 TUN/VPN。
+- 修订记录：2026-10-23，增加钉钉直连、瞬态故障有限重试及投递成功确认。
+
 ## 2.13 2026-10-23 Codex 审批策略对齐
 
 - 从最新 `turn_context` 或 `thread_settings_applied` 读取会话审批策略；明确为 `never` 时抑制等待审批状态及钉钉通知。

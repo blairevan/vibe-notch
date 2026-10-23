@@ -14,6 +14,20 @@ final class DingTalkNotificationCoordinator {
     private let isEnabled: () -> Bool
     private let now: () -> Date
     private let send: SendHandler
+    private let sleep: (UInt64) async throws -> Void
+    private var inFlightCompletions: [String: CompletionFingerprint] = [:]
+    private var inFlightPermissions: [String: Set<String>] = [:]
+    /// Exhausted permissions are failed, not delivered; snapshots must not reset their retry budget.
+    private var failedPermissionIds: [String: Set<String>] = [:]
+    private var deliveryGeneration = 0
+
+    /// Identifies the state to acknowledge only after successful delivery.
+    private struct Delivery {
+        let message: DingTalkMessage
+        let sessionId: String
+        let fingerprint: CompletionFingerprint?
+        let permissionId: String?
+    }
     private var subscription: AnyCancellable?
     private var hasSeededSnapshot = false
     private var previousPhases: [String: PhaseMarker] = [:]
@@ -30,11 +44,13 @@ final class DingTalkNotificationCoordinator {
         credentialStore: DingTalkCredentialStoring? = nil,
         isEnabled: (() -> Bool)? = nil,
         now: (() -> Date)? = nil,
-        send: SendHandler? = nil
+        send: SendHandler? = nil,
+        sleep: @escaping (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
     ) {
         self.credentialStore = credentialStore ?? DingTalkCredentialStore.shared
         self.isEnabled = isEnabled ?? { AppSettings.dingTalkEnabled }
         self.now = now ?? Date.init
+        self.sleep = sleep
 
         if let send {
             self.send = send
@@ -65,6 +81,10 @@ final class DingTalkNotificationCoordinator {
 
     /// Stops observing and clears transient deduplication state.
     func stop() {
+        deliveryGeneration += 1
+        inFlightCompletions.removeAll()
+        inFlightPermissions.removeAll()
+        failedPermissionIds.removeAll()
         subscription?.cancel()
         subscription = nil
         processingTask?.cancel()
@@ -84,7 +104,7 @@ final class DingTalkNotificationCoordinator {
         }
 
         removeStateForMissingSessions(sessions)
-        var messages: [DingTalkMessage] = []
+        var messages: [Delivery] = []
 
        for session in sessions {
            let currentPhase = PhaseMarker(session.phase)
@@ -109,7 +129,7 @@ final class DingTalkNotificationCoordinator {
                } else if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
                    baseline == fingerprint || (baseline.lastMessage != nil && baseline.lastMessage == fingerprint.lastMessage) {
                    isCompletion = false
-               } else if lastNotifiedCompletions[session.sessionId] == fingerprint {
+               } else if lastNotifiedCompletions[session.sessionId] == fingerprint || inFlightCompletions[session.sessionId] == fingerprint {
                    isCompletion = false
                } else {
                    isCompletion = fingerprint.hasUserContent
@@ -128,18 +148,19 @@ final class DingTalkNotificationCoordinator {
             }
 
            if isCompletion {
-                lastNotifiedCompletions[session.sessionId] = fingerprint
+                inFlightCompletions[session.sessionId] = fingerprint
                Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
-               messages.append(taskCompletedMessage(for: session))
+               messages.append(Delivery(message: taskCompletedMessage(for: session), sessionId: session.sessionId, fingerprint: fingerprint, permissionId: nil))
            }
 
             if case .waitingForApproval(let toolUseId) = currentPhase,
                session.conversationInfo.allowsApprovalNotification {
-                var sessionIds = notifiedPermissionIds[session.sessionId] ?? []
-                if sessionIds.insert(toolUseId).inserted {
-                    messages.append(permissionMessage(for: session))
+                if notifiedPermissionIds[session.sessionId]?.contains(toolUseId) != true,
+                   inFlightPermissions[session.sessionId]?.contains(toolUseId) != true,
+                   failedPermissionIds[session.sessionId]?.contains(toolUseId) != true {
+                    inFlightPermissions[session.sessionId, default: []].insert(toolUseId)
+                    messages.append(Delivery(message: permissionMessage(for: session), sessionId: session.sessionId, fingerprint: nil, permissionId: toolUseId))
                 }
-                notifiedPermissionIds[session.sessionId] = sessionIds
             }
 
             previousPhases[session.sessionId] = currentPhase
@@ -165,13 +186,27 @@ final class DingTalkNotificationCoordinator {
         let activeIds = Set(sessions.map(\.sessionId))
        previousPhases = previousPhases.filter { activeIds.contains($0.key) }
        notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
+        failedPermissionIds = failedPermissionIds.filter { activeIds.contains($0.key) }
        compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
         lastNotifiedCompletions = lastNotifiedCompletions.filter { activeIds.contains($0.key) }
    }
 
     /// Sends generated messages when enabled credentials are available.
-    private func sendMessagesIfConfigured(_ messages: [DingTalkMessage]) async {
-        guard !messages.isEmpty, isEnabled() else { return }
+    private func sendMessagesIfConfigured(_ messages: [Delivery]) async {
+        let generation = deliveryGeneration
+        defer {
+            if generation == deliveryGeneration {
+                for delivery in messages {
+                    if inFlightCompletions[delivery.sessionId] == delivery.fingerprint {
+                        inFlightCompletions.removeValue(forKey: delivery.sessionId)
+                    }
+                    if let id = delivery.permissionId {
+                        inFlightPermissions[delivery.sessionId]?.remove(id)
+                    }
+                }
+            }
+        }
+        guard !messages.isEmpty, isEnabled(), !Task.isCancelled else { return }
         Self.logger.info("[DingTalk Debug] sendMessagesIfConfigured: \(messages.count) messages, isEnabled=\(self.isEnabled(), privacy: .public)")
 
         let logLine = "[\(getpid())] [coordinator] sending \(messages.count) DingTalk messages\n"
@@ -188,13 +223,48 @@ final class DingTalkNotificationCoordinator {
         }
         guard !credentials.token.isEmpty else { return }
 
-        for message in messages {
-            do {
-                try await send(message, credentials)
-            } catch {
-                Self.logger.error("DingTalk notification failed: \(String(describing: type(of: error)), privacy: .public)")
+        for delivery in messages {
+            if await deliverWithRetry(delivery.message, credentials: credentials, generation: generation),
+               generation == deliveryGeneration {
+                if let fingerprint = delivery.fingerprint {
+                    lastNotifiedCompletions[delivery.sessionId] = fingerprint
+                }
+                if let id = delivery.permissionId {
+                    notifiedPermissionIds[delivery.sessionId, default: []].insert(id)
+                }
+            } else if generation == deliveryGeneration, let id = delivery.permissionId {
+                failedPermissionIds[delivery.sessionId, default: []].insert(id)
             }
         }
+    }
+
+    /// Retries transient failures at most three times, without blocking the main thread.
+    private func deliverWithRetry(_ message: DingTalkMessage, credentials: DingTalkCredentials, generation: Int) async -> Bool {
+        let delays: [UInt64] = [2, 5, 15]
+        for attempt in 0...delays.count {
+            guard !Task.isCancelled, isEnabled(), generation == deliveryGeneration else { return false }
+            do {
+                try await send(message, credentials)
+                return true
+            } catch {
+                guard let failure = error as? DingTalkClientError,
+                      failure.isRetryable, attempt < delays.count else {
+                    Self.logger.error("DingTalk delivery failed after \(attempt + 1) attempts (\(String(describing: type(of: error)), privacy: .public))")
+                    return false
+                }
+                do {
+                    var delay = Double(delays[attempt])
+                    if case .rateLimited(let retryAfter) = failure {
+                        delay = max(delay, retryAfter)
+                    }
+                    Self.logger.info("DingTalk retry \(attempt + 1) scheduled in \(delay) seconds")
+                    try await sleep(UInt64(delay * 1_000_000_000))
+                } catch {
+                    return false
+                }
+            }
+        }
+        return false
     }
 
     /// Creates a task-completed message containing rich and safe session metadata.

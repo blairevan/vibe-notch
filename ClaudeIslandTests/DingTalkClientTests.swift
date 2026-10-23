@@ -5,6 +5,15 @@ import XCTest
 /// Verifies DingTalk request construction and response handling.
 @MainActor
 final class DingTalkClientTests: XCTestCase {
+    /// DingTalk disables all system HTTP, HTTPS, SOCKS and automatic proxy paths.
+    func testDirectSessionDisablesSystemProxy() throws {
+        let configuration = DingTalkClient.directSessionConfiguration()
+        let proxy = try XCTUnwrap(configuration.connectionProxyDictionary)
+        for key in ["HTTPEnable", "HTTPSEnable", "SOCKSEnable", "ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"] {
+            XCTAssertEqual(proxy[key] as? Int, 0)
+        }
+    }
+
     /// Verifies an unsigned request includes the encoded robot token and Markdown payload.
     func testUnsignedRequestUsesTokenAndMarkdownBody() async throws {
         let recorder = RequestRecorder(responseBody: #"{"errcode":0,"errmsg":"ok"}"#)

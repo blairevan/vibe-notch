@@ -20,8 +20,26 @@ enum DingTalkClientError: Error, Equatable, LocalizedError {
     case transport(code: Int?)
     case invalidResponse
     case httpStatus(Int)
+    case rateLimited(retryAfter: TimeInterval)
     case invalidPayload
     case business(code: Int, message: String)
+
+    /// Only transient connectivity and server failures are safe to retry automatically.
+    var isRetryable: Bool {
+        switch self {
+        case .transport(let code):
+            return [URLError.timedOut.rawValue, URLError.networkConnectionLost.rawValue,
+                    URLError.notConnectedToInternet.rawValue, URLError.cannotConnectToHost.rawValue,
+                    URLError.cannotFindHost.rawValue, URLError.dnsLookupFailed.rawValue].contains(code ?? 0)
+        case .httpStatus(let status):
+            return status == 429 || (500...599).contains(status)
+        case .rateLimited(let retryAfter):
+            // Do not keep the serialized notification queue asleep indefinitely.
+            return retryAfter <= 300
+        default:
+            return false
+        }
+    }
 
     /// A user-facing description that never includes request credentials or content.
     var errorDescription: String? {
@@ -36,6 +54,8 @@ enum DingTalkClientError: Error, Equatable, LocalizedError {
             return "DingTalk returned an invalid HTTP response."
         case .httpStatus(let statusCode):
             return "DingTalk returned HTTP \(statusCode)."
+        case .rateLimited:
+            return "DingTalk requested delayed delivery."
         case .invalidPayload:
             return "DingTalk returned an unreadable response."
         case .business(let code, let message):
@@ -83,6 +103,11 @@ final class DingTalkClient {
             throw DingTalkClientError.invalidResponse
         }
         guard (200 ... 299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 429 || httpResponse.statusCode == 503,
+               let value = httpResponse.value(forHTTPHeaderField: "Retry-After"),
+               let delay = Self.retryAfterDelay(value) {
+                throw DingTalkClientError.rateLimited(retryAfter: delay)
+            }
             throw DingTalkClientError.httpStatus(httpResponse.statusCode)
         }
 
@@ -90,7 +115,7 @@ final class DingTalkClient {
         do {
             result = try JSONDecoder().decode(DingTalkAPIResponse.self, from: data)
         } catch {
-            let errLine = "[\(getpid())] [dingtalk-client] FAILED to decode response: \(String(data: data, encoding: .utf8) ?? "")\n"
+            let errLine = "[\(getpid())] [dingtalk-client] FAILED to decode response\n"
             if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
                 fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }
@@ -98,7 +123,7 @@ final class DingTalkClient {
         }
 
         guard result.errcode == 0 else {
-            let errLine = "[\(getpid())] [dingtalk-client] BUSINESS ERROR: code=\(result.errcode), msg=\(result.errmsg)\n"
+            let errLine = "[\(getpid())] [dingtalk-client] BUSINESS ERROR: code=\(result.errcode)\n"
             if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
                 fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }
@@ -111,9 +136,35 @@ final class DingTalkClient {
         }
     }
 
-    /// Performs a request using the shared system URL session.
+    /// Parses a server delay expressed as delta-seconds or an HTTP date.
+    private static func retryAfterDelay(_ value: String) -> TimeInterval? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(trimmed), seconds.isFinite, seconds >= 0 {
+            return seconds
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: trimmed) else { return nil }
+        return max(0, date.timeIntervalSinceNow)
+    }
+
+    /// A dedicated direct connection; other notification channels keep their own proxy policy.
+    static func directSessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [
+            "HTTPEnable": 0, "HTTPSEnable": 0, "SOCKSEnable": 0,
+            "ProxyAutoConfigEnable": 0, "ProxyAutoDiscoveryEnable": 0
+        ]
+        return configuration
+    }
+
+    private static let directSession = URLSession(configuration: directSessionConfiguration())
+
+    /// Performs a request using the dedicated direct URL session, not URLSession.shared.
     private static func liveTransport(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        try await URLSession.shared.data(for: request)
+        try await directSession.data(for: request)
     }
 
     /// Builds a DingTalk Markdown request with optional signing query values.
