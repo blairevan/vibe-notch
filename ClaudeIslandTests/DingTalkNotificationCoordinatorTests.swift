@@ -774,22 +774,50 @@ final class DingTalkNotificationCoordinatorTests: XCTestCase {
         }
     }
 
+    /// Verifies HookInstaller ensures PermissionRequest is absent from ~/.codex/hooks.json.
+    func testHookInstallerRemovesPermissionRequestFromCodexHooks() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let codexDir = home + "/.codex"
+        let hooksJsonFile = URL(fileURLWithPath: codexDir + "/hooks.json")
+        guard fm.fileExists(atPath: codexDir) else { return }
+
+        HookInstaller.installCodexHooksIfNeeded()
+
+        if let data = try? Data(contentsOf: hooksJsonFile),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let hooks = json["hooks"] as? [String: Any] {
+            XCTAssertNil(hooks["PermissionRequest"], "PermissionRequest must not be installed in Codex hooks.json")
+            XCTAssertNotNil(hooks["PreToolUse"])
+            XCTAssertNotNil(hooks["PostToolUse"])
+            XCTAssertNotNil(hooks["UserPromptSubmit"])
+            XCTAssertNotNil(hooks["Stop"])
+        }
+    }
+
     /// A session's latest approval policy must override older never-policy turns.
     func testCodexApprovalPolicyControlsPermissionNotification() async {
-        for (policy, expectedCount) in [("never", 0), ("on-request", 1)] {
+        for (policy, expectedCount) in [(Optional("never"), 0), (Optional("on-request"), 1), (nil, 0)] {
             let recorder = MessageRecorder()
             let coordinator = makeCoordinator(recorder: recorder)
-            let content = """
-            {"type":"turn_context","payload":{"approval_policy":"never"}}
-            {"type":"turn_context","payload":{"approval_policy":"\(policy)"}}
-            """
+            let content: String
+            if let policy = policy {
+                content = """
+                {"type":"turn_context","payload":{"approval_policy":"never"}}
+                {"type":"turn_context","payload":{"approval_policy":"\(policy)"}}
+                """
+            } else {
+                content = """
+                {"type":"session_meta","payload":{"id":"session-1","session_id":"session-1"}}
+                """
+            }
             let info = await ConversationParser.shared.parseContentForTesting(content, isCodex: true)
             var session = makeSession(phase: .processing)
             session.conversationInfo = info
             await coordinator.processSnapshot([session])
             session.phase = makePermissionSession(toolUseId: "policy-test").phase
             await coordinator.processSnapshot([session])
-            XCTAssertEqual(recorder.messages.count, expectedCount, "Policy: \(policy)")
+            XCTAssertEqual(recorder.messages.count, expectedCount, "Policy: \(String(describing: policy))")
         }
     }
 

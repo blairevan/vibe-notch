@@ -85,6 +85,7 @@ def main():
     # Get process info
     claude_pid = os.getppid()
     tty = get_tty()
+    is_codex = ".codex" in os.path.abspath(__file__)
 
     # Build state object
     state = {
@@ -93,6 +94,7 @@ def main():
         "event": event,
         "pid": claude_pid,
         "tty": tty,
+        "client": "codex" if is_codex else "claude",
     }
 
     # Map events to status
@@ -137,6 +139,10 @@ def main():
         state["denial_reason"] = data.get("reason") or data.get("message")
 
     elif event == "PermissionRequest":
+        # Codex tools are governed by Codex's own approval policy; never report waiting_for_approval to Vibe Notch
+        if is_codex:
+            sys.exit(0)
+
         # This is where we can control the permission
         state["status"] = "waiting_for_approval"
         state["tool"] = data.get("tool_name")

@@ -48,7 +48,13 @@ struct ConversationInfo: Sendable, Equatable {
 
     /// Whether a hook may represent an interactive approval for this conversation.
     var allowsApprovalNotification: Bool {
-        clientName != "codex" || approvalPolicy != "never"
+        guard clientName != "codex" else {
+            guard let policy = approvalPolicy else {
+                return false
+            }
+            return policy != "never"
+        }
+        return true
     }
     var lastErrorMessage: String? = nil  // Extracted error message if turn failed
 

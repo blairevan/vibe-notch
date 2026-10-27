@@ -642,11 +642,13 @@ export function apply(ctx) {
         }
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
+        // Codex executes tools under its own approval policy; remove PermissionRequest to prevent redundant approval popups/notifications
+        hooks.removeValue(forKey: "PermissionRequest")
+
         let codexEvents: [(String, [[String: Any]])] = [
             ("UserPromptSubmit", withoutMatcher),
             ("PreToolUse", withMatcher),
             ("PostToolUse", withMatcher),
-            ("PermissionRequest", withMatcherAndTimeout),
             ("Notification", withMatcher),
             ("Stop", withoutMatcher),
             ("SessionStart", withoutMatcher),

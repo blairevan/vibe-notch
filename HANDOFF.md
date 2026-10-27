@@ -220,6 +220,22 @@ Codex Desktop 在自动上下文压缩时会产生 `PreCompact -> compacting -> 
 
 ---
 
+## 2.15 2026-10-27 彻底移除 Codex PermissionRequest 钩子与免审批放行
+
+### 变更明细
+
+| 日期 | 模块 / 文件 | 改动内容 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 2026-10-27 | HookInstaller.swift | 从 Codex 注册事件列表中彻底移除 PermissionRequest，启动自检时主动清理 ~/.codex/hooks.json 中的权限拦截配置。 | ✅ |
+| 2026-10-27 | claude-island-state.py | 增加 is_codex 宿主环境识别；在收到 PermissionRequest 时快速退出放行，并在状态中准确标记 client 为 codex。 | ✅ |
+| 2026-10-27 | ConversationParser.swift | 修复 allowsApprovalNotification 可选解包安全缺陷：当 clientName 为 codex 且 approvalPolicy 为 nil 时默认为 false，禁止发审批卡片。 | ✅ |
+| 2026-10-27 | DingTalkNotificationCoordinatorTests.swift | 新增 HookInstaller 清理单测与 nil 策略回归测试，全量 57 个单测全部通过。 | ✅ |
+| 2026-10-27 | 双机部署 | 完成本地构建已签名 Release 与双机（本地 + Mac mini）应用包热部署与进程重启。 | ✅ |
+
+| 2026-10-27 22:05:00 | Assistant | 彻底拔除 Codex PermissionRequest 钩子并完成双端热部署，杜绝所有假性权限审批钉钉通知。 |
+
+---
+
 ## 2.14 2026-10-23 钉钉直连与有界重试
 
 - 开发分支：`codex/dingtalk-reliable-delivery`；交付目标为合入 `main` 并复制已签名 Release 到 Mac mini。
