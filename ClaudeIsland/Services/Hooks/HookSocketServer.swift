@@ -463,8 +463,8 @@ class HookSocketServer {
         let data = allData
 
         guard let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
-            logger.warning("Failed to parse event: \(String(data: data, encoding: .utf8) ?? "?", privacy: .public)")
-            let errLine = "[\(getpid())] [socket-server] JSON decode FAILED: \(String(data: data, encoding: .utf8) ?? "?")\n"
+            logger.warning("Failed to parse hook event (\(data.count) bytes); payload omitted")
+            let errLine = "[\(getpid())] [socket-server] JSON decode FAILED (\(data.count) bytes); payload omitted\n"
             if let d = errLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
                 fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }

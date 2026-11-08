@@ -341,7 +341,7 @@ actor ConversationParser {
     }
 
         /// Cleans ambient contexts, system instructions, and extracts direct prompt if available
-    private static func cleanUserPrompt(_ raw: String) -> String {
+    nonisolated static func cleanUserPrompt(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return raw }
 

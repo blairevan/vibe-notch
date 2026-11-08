@@ -274,9 +274,6 @@ final class DingTalkNotificationCoordinator {
 
     /// Creates a task-completed message containing rich and safe session metadata.
     private func taskCompletedMessage(for session: SessionState) -> DingTalkMessage {
-        if let state = session.antigravity, let source = session.antigravitySource {
-            return antigravityMessage(for: session, state: state, source: source)
-        }
         let rawProject = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
         let projectName = (rawProject.isEmpty || rawProject == "/") ? "Default" : safeValue(rawProject, fallback: "Default")
         let subject = extractSubject(from: session)
@@ -285,7 +282,7 @@ final class DingTalkNotificationCoordinator {
         let duration = formattedDuration(for: session)
         let terminalInfo = extractTerminalInfo(from: session)
         let timeString = formattedTime()
-        let hasError = session.conversationInfo.lastErrorMessage != nil && !session.conversationInfo.lastErrorMessage!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasError = session.antigravity?.outcome == .failed || !(session.conversationInfo.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         let title = hasError ? "Vibe Notch - Task Error" : "Vibe Notch - Task Completed"
         let header = hasError ? "### ⚠️ Vibe Notch - 任务异常中断" : "### 🚀 Vibe Notch - 任务已完成"
         let status = hasError ? "❌ 执行中断 (遇到错误)" : "✅ 执行完成 (等待输入)"
@@ -311,24 +308,6 @@ final class DingTalkNotificationCoordinator {
             - **耗时**：\(duration)
             - **终端**：\(terminalInfo)
             - **时间**：\(timeString)
-            """
-        )
-    }
-
-    /// Render lifecycle metadata without consulting or transmitting conversation content.
-    private func antigravityMessage(
-        for session: SessionState, state: AntigravitySession, source: AntigravitySource
-    ) -> DingTalkMessage {
-        let failed = state.outcome == .failed
-        return DingTalkMessage(
-            title: failed ? "Vibe Notch - Task Error" : "Vibe Notch - Task Completed",
-            text: """
-            ### \(failed ? "⚠️" : "✅") \(state.outcome?.label ?? "任务已停止")
-
-            - **项目**：\(safeValue(session.projectName, fallback: "Default"))
-            - **来源**：\(source.label)
-            - **耗时**：\(formattedDuration(for: session))
-            - **时间**：\(formattedTime())
             """
         )
     }
@@ -369,6 +348,9 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts the session subject/summary with fallbacks, checking DSH and Codex SQLite thread title first.
     private func extractSubject(from session: SessionState) -> String {
+        if session.antigravity != nil {
+            return safeValue(session.conversationInfo.summary ?? session.conversationInfo.firstUserMessage ?? "未命名会话", fallback: "未命名会话")
+        }
         if session.conversationInfo.clientName == "dsh" || session.cwd.contains(".dsh") {
             if let summary = session.conversationInfo.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return safeValue(summary, fallback: "未命名会话")
@@ -447,6 +429,7 @@ final class DingTalkNotificationCoordinator {
 
         guard let lastMsg = session.conversationInfo.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
               !lastMsg.isEmpty else {
+            if session.antigravity != nil { return "未能获取本轮最终回复，请返回原会话查看。" }
             return "已完成当前执行，等待进一步输入。"
         }
         let cleanText = lastMsg.replacingOccurrences(of: "\r\n", with: "\n")
@@ -481,7 +464,11 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts terminal identifier and PID with friendly GUI name.
     private func extractTerminalInfo(from session: SessionState) -> String {
-        if let source = session.antigravitySource { return source.label }
+        if let source = session.antigravitySource {
+            let tty = session.tty.map { " (\($0))" } ?? ""
+            let pid = session.pid.map { " (PID: \($0))" } ?? ""
+            return source.label + tty + pid
+        }
         let clientName = session.conversationInfo.clientName
 
         // 1. Explicit DSH client types

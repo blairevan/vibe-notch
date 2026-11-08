@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forward metadata-only Antigravity lifecycle events to Vibe Notch."""
+"""Forward Antigravity lifecycle and approved notification context to Vibe Notch."""
 
 import argparse
 import json
@@ -15,7 +15,7 @@ EVENTS = {"SessionStart", "PreInvocation", "PostToolUse", "Stop"}
 
 
 def normalize_event(event_name, payload):
-    """Translate upstream metadata without forwarding prompts, results, or errors."""
+    """Translate lifecycle fields and the context needed for a current-turn notification."""
     if event_name not in EVENTS or not isinstance(payload, dict):
         return None
     conversation = payload.get("conversationId")
@@ -41,12 +41,17 @@ def normalize_event(event_name, payload):
         "hasError": bool(payload.get("error")),
         "isSubagent": payload.get("isSubagent") is True or bool(payload.get("parentConversationId")),
     }
-    for key in ("executionNum", "invocationNum"):
+    for key in ("executionNum", "invocationNum", "initialNumSteps"):
         value = payload.get(key)
         if type(value) is int and value >= 0:
             metadata[key] = value
     if type(payload.get("fullyIdle")) is bool:
         metadata["fullyIdle"] = payload["fullyIdle"]
+    if event_name in {"PreInvocation", "Stop"}:
+        for key in ("transcriptPath", "lastUserInput", "error"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                metadata[key] = value[:65536] if key != "transcriptPath" else value[:4096]
     reason = payload.get("terminationReason")
     if isinstance(reason, str):
         # Only accept enum-shaped text; arbitrary error prose stays with the host.

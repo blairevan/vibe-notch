@@ -47,7 +47,12 @@ actor SessionStore {
 
     // MARK: - Initialization
 
-    private init() {}
+    private let notificationContextLoader: AntigravityNotificationContextLoader
+
+    /// Accept a bounded content reader while keeping session storage actor-isolated.
+    init(notificationContextLoader: AntigravityNotificationContextLoader = .shared) {
+        self.notificationContextLoader = notificationContextLoader
+    }
 
     // MARK: - Event Processing
 
@@ -122,7 +127,7 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         if AntigravitySource(rawValue: event.client ?? "") != nil {
-            processAntigravityEvent(event)
+            await processAntigravityEvent(event)
             return
         }
         let sessionId = event.sessionId
@@ -220,8 +225,8 @@ actor SessionStore {
         }
     }
 
-    /// Apply metadata-only hooks without scheduling any conversation-file work.
-    private func processAntigravityEvent(_ event: HookEvent) {
+    /// Apply lifecycle authority, then enrich a terminal notification with bounded content reads.
+    private func processAntigravityEvent(_ event: HookEvent) async {
         guard let metadata = event.antigravity,
               let source = AntigravitySource(rawValue: event.client ?? ""),
               event.sessionId == "\(source.rawValue):\(metadata.conversationId)" else { return }
@@ -233,7 +238,11 @@ actor SessionStore {
         }
         var state = session.antigravity ?? AntigravitySession(conversationId: metadata.conversationId)
         let wasActive = state.isActive
+        let previousCompletion = state.completionID
         state.apply(event: event.event, metadata: metadata)
+        let needsContent = state.completionID != nil && state.completionID != previousCompletion &&
+            !state.isSubagent && (state.outcome == .completed || state.outcome == .failed)
+        if needsContent { state.isLoadingNotification = true }
         session.antigravity = state
         session.conversationInfo.clientName = source.rawValue
         session.conversationInfo.isSubagent = state.isSubagent
@@ -245,13 +254,37 @@ actor SessionStore {
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
         }
         if let tty = event.tty { session.tty = tty }
-        if state.isActive {
+        if state.isActive || state.isLoadingNotification {
             session.phase = .processing
-            if !wasActive { session.turnStartTime = Date() }
+            if state.isActive && !wasActive {
+                session.turnStartTime = Date()
+                session.conversationInfo.lastMessage = nil
+                session.conversationInfo.lastErrorMessage = nil
+                let prompt = metadata.lastUserInput.map { ConversationParser.cleanUserPrompt($0) }
+                session.conversationInfo.lastUserMessage = prompt
+                if session.conversationInfo.firstUserMessage == nil { session.conversationInfo.firstUserMessage = prompt }
+            }
         } else if state.outcome != nil {
             session.phase = .waitingForInput
         }
         sessions[event.sessionId] = session
+        guard needsContent else { return }
+        var contextMetadata = metadata
+        contextMetadata.lastUserInput = metadata.lastUserInput ?? session.conversationInfo.lastUserMessage
+        let content = await notificationContextLoader.load(
+            metadata: contextMetadata, initialStep: state.initialStep, startedAt: session.turnStartTime ?? session.createdAt
+        )
+        // Another turn or archival may have occurred while the file was being written.
+        guard var current = sessions[event.sessionId], current.antigravity?.completionID == state.completionID,
+            current.antigravity?.generation == state.generation, current.antigravity?.isActive == false else { return }
+        current.conversationInfo.summary = content.title
+        current.conversationInfo.lastUserMessage = content.prompt
+        current.conversationInfo.lastMessage = content.response
+        current.conversationInfo.lastMessageRole = content.response == nil ? nil : "assistant"
+        current.conversationInfo.lastErrorMessage = state.outcome == .failed ? (content.error?.isEmpty == false ? content.error : "执行异常中断（未提供错误详情）") : nil
+        current.antigravity?.isLoadingNotification = false
+        current.phase = .waitingForInput
+        sessions[event.sessionId] = current
     }
 
     private func createSession(from event: HookEvent) -> SessionState {

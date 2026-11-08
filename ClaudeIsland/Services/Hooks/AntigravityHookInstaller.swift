@@ -99,7 +99,7 @@ enum AntigravityHookInstaller {
             title: "agy / Antigravity / Antigravity IDE",
             status: status,
             details:
-                "Shared lifecycle hooks in ~/.gemini/config/hooks.json; no conversation content is collected."
+                "Shared lifecycle hooks in ~/.gemini/config/hooks.json; DingTalk includes the current task and final result."
         )
     }
 
