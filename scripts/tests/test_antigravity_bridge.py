@@ -76,13 +76,16 @@ class AntigravityBridgeTests(unittest.TestCase):
         self.assertEqual(event["client"], "antigravity-cli")
         self.assertEqual(event["tty"], "ttys001")
 
-    def test_bridge_does_not_forward_conversation_or_error_text(self):
-        """Raw prompts, replies, and potentially sensitive errors stay in the host."""
+    def test_bridge_only_forwards_approved_notification_fields(self):
+        """Prompt, error, and log location support rich notifications; raw reply stays local."""
         bridge = self.load_bridge()
         payload = self.payload()
         payload["error"] = "PRIVATE_ERROR"
         event = bridge.normalize_event("Stop", payload)
-        self.assertNotIn("PRIVATE_", json.dumps(event))
+        self.assertEqual(event["antigravity"].get("lastUserInput"), "PRIVATE_PROMPT")
+        self.assertEqual(event["antigravity"].get("error"), "PRIVATE_ERROR")
+        self.assertEqual(event["antigravity"].get("transcriptPath"), payload["transcriptPath"])
+        self.assertNotIn("PRIVATE_REPLY", json.dumps(event))
         self.assertTrue(event["antigravity"]["hasError"])
 
     def test_missing_identity_is_ignored_and_unknown_origin_is_explicit(self):

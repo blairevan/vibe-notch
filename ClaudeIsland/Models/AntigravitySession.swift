@@ -9,6 +9,10 @@ nonisolated struct AntigravityHookMetadata: Codable, Equatable, Sendable {
     let terminationReason: String?
     let hasError: Bool
     let isSubagent: Bool
+    var transcriptPath: String? = nil
+    var lastUserInput: String? = nil
+    var error: String? = nil
+    var initialNumSteps: Int? = nil
 
     /// Classify known host enums conservatively; unknown stops are never successes.
     var outcome: AntigravityOutcome {
@@ -49,6 +53,8 @@ nonisolated struct AntigravitySession: Equatable, Sendable {
     var outcome: AntigravityOutcome?
     var completionID: String?
     var isSubagent = false
+    var initialStep: Int?
+    var isLoadingNotification = false
 
     /// Starts an event-only session for one upstream conversation.
     init(conversationId: String) {
@@ -65,6 +71,8 @@ nonisolated struct AntigravitySession: Equatable, Sendable {
                 outcome = nil
                 completionID = nil
                 isActive = true
+                initialStep = metadata.initialNumSteps
+                isLoadingNotification = false
             }
         case "Stop":
             guard isActive, metadata.fullyIdle == true else { return }
