@@ -169,6 +169,7 @@ extension HookEvent {
 
     /// Whether this event should trigger a file sync
     nonisolated var shouldSyncFile: Bool {
+        if AntigravitySource(rawValue: client ?? "") != nil { return false }
         switch event {
         case "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop":
             return true

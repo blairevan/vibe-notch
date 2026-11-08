@@ -26,6 +26,7 @@ struct HookEvent: Codable, Sendable {
     let notificationType: String?
     let message: String?
     let client: String?
+    let antigravity: AntigravityHookMetadata?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -35,10 +36,11 @@ struct HookEvent: Codable, Sendable {
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
         case message, reason
+        case antigravity
     }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, client: String? = nil) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, client: String? = nil, antigravity: AntigravityHookMetadata? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -51,6 +53,7 @@ struct HookEvent: Codable, Sendable {
         self.notificationType = notificationType
         self.message = message
         self.client = client
+        self.antigravity = antigravity
     }
 
     init(from decoder: Decoder) throws {
@@ -84,6 +87,7 @@ struct HookEvent: Codable, Sendable {
         notificationType = try container.decodeIfPresent(String.self, forKey: .notificationType)
         message = try container.decodeIfPresent(String.self, forKey: .message) ?? reason
         client = try container.decodeIfPresent(String.self, forKey: .client)
+        antigravity = try container.decodeIfPresent(AntigravityHookMetadata.self, forKey: .antigravity)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -100,6 +104,7 @@ struct HookEvent: Codable, Sendable {
         try container.encodeIfPresent(notificationType, forKey: .notificationType)
         try container.encodeIfPresent(message, forKey: .message)
         try container.encodeIfPresent(client, forKey: .client)
+        try container.encodeIfPresent(antigravity, forKey: .antigravity)
     }
 
     var sessionPhase: SessionPhase {

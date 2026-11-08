@@ -120,7 +120,12 @@ final class DingTalkNotificationCoordinator {
                 (.waitingForApproval, .waitingForInput):
                // For Codex sessions: verify with the session's authoritative isTurnCompleted flag.
                // If an ongoing turn (task_started without task_complete) exists, it is not a turn end.
-               if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
+               if let state = session.antigravity {
+                   isCompletion = state.completionID != nil && !state.isSubagent &&
+                       state.outcome != .cancelled && state.outcome != .stopped &&
+                       lastNotifiedCompletions[session.sessionId] != fingerprint &&
+                       inFlightCompletions[session.sessionId] != fingerprint
+               } else if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
                    isCompletion = false
                } else if session.conversationInfo.isSubagent {
                    isCompletion = false
@@ -269,6 +274,9 @@ final class DingTalkNotificationCoordinator {
 
     /// Creates a task-completed message containing rich and safe session metadata.
     private func taskCompletedMessage(for session: SessionState) -> DingTalkMessage {
+        if let state = session.antigravity, let source = session.antigravitySource {
+            return antigravityMessage(for: session, state: state, source: source)
+        }
         let rawProject = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
         let projectName = (rawProject.isEmpty || rawProject == "/") ? "Default" : safeValue(rawProject, fallback: "Default")
         let subject = extractSubject(from: session)
@@ -303,6 +311,24 @@ final class DingTalkNotificationCoordinator {
             - **耗时**：\(duration)
             - **终端**：\(terminalInfo)
             - **时间**：\(timeString)
+            """
+        )
+    }
+
+    /// Render lifecycle metadata without consulting or transmitting conversation content.
+    private func antigravityMessage(
+        for session: SessionState, state: AntigravitySession, source: AntigravitySource
+    ) -> DingTalkMessage {
+        let failed = state.outcome == .failed
+        return DingTalkMessage(
+            title: failed ? "Vibe Notch - Task Error" : "Vibe Notch - Task Completed",
+            text: """
+            ### \(failed ? "⚠️" : "✅") \(state.outcome?.label ?? "任务已停止")
+
+            - **项目**：\(safeValue(session.projectName, fallback: "Default"))
+            - **来源**：\(source.label)
+            - **耗时**：\(formattedDuration(for: session))
+            - **时间**：\(formattedTime())
             """
         )
     }
@@ -455,6 +481,7 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts terminal identifier and PID with friendly GUI name.
     private func extractTerminalInfo(from session: SessionState) -> String {
+        if let source = session.antigravitySource { return source.label }
         let clientName = session.conversationInfo.clientName
 
         // 1. Explicit DSH client types
@@ -596,12 +623,14 @@ private enum PhaseMarker: Equatable {
 
 /// Stable, privacy-safe subset used to compare results across compaction.
 private struct CompletionFingerprint: Equatable {
+    let eventCompletionID: String?
     let lastUserMessage: String?
     let lastMessage: String?
     let lastMessageRole: String?
 
     /// Captures the conversation fields relevant to a completion notification.
     init(session: SessionState) {
+        eventCompletionID = session.antigravity?.completionID
         lastUserMessage = session.conversationInfo.lastUserMessage
         lastMessage = session.conversationInfo.lastMessage
         lastMessageRole = session.conversationInfo.lastMessageRole

@@ -105,6 +105,36 @@ open -a "Vibe Notch"
 
 ## 核心功能
 
+### Antigravity 系列：通知与跳转
+
+支持 `agy` CLI、Antigravity App 和 Antigravity IDE。启动新版 Vibe Notch 后，应用会在
+`~/.gemini/config/hooks.json` 合并独立的 `vibe-notch-antigravity` 配置，保留已有的 cmux
+等 Hooks；桥接脚本位于 `~/.gemini/config/vibe-notch/antigravity_bridge.py`。已打开的客户端
+若未加载新配置，可重新打开会话，并在对应客户端的 Hooks 管理界面确认配置已启用。
+
+- 刘海显示来源、项目及处理中、已完成、异常、取消或停止状态。
+- 正常完成与明确异常复用现有钉钉通知开关和凭证；取消、未知原因停止不发送成功通知。
+- 仅在 `Stop` 明确报告完全空闲后确认终止，后台任务仍运行时保持处理中。
+- 点击返回按钮或应用图标：agy 优先定位原 tmux pane/终端，两个 GUI 产品激活各自应用。
+  首期 GUI 跳转到应用层级，不保证选择原聊天或原窗口；定位失败会提示手动切换。
+- 首期只传递生命周期元数据，不读取或发送用户提问、模型回复和原始错误正文，也不接管审批。
+- 菜单中的体检功能会检查这组 Hooks；可以在上游 Hooks 设置中禁用该配置，Vibe Notch
+  后续启动会保留显式禁用状态。
+
+部分 IDE 版本与 App 共用 `~/.gemini/antigravity` 数据目录，桥接会通过宿主进程链识别 IDE，
+而在 IDE 内置终端运行的 agy 仍标记为 CLI。agy 在后续事件才补齐工作目录时，项目标签会自动更新。
+
+兼容边界：若上游漏发最终 `Stop`、缺少 `fullyIdle`，或其他 Hooks 强制续跑，状态可能无法
+立即反映最终结果；不会通过静默超时推断成功。子代理过滤依赖上游提供的子代理或父会话标记，
+尚未完成三个真实客户端的子代理场景联调。远程运行的 Hooks 不会自动转发到本机 Socket。
+
+开发验证：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -v
+xcodebuild test -scheme ClaudeIsland -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+```
+
 ### 1. 刘海通知
 
 应用启动后，会在 MacBook 刘海区域显示一个紧凑的状态指示器。当 Claude Code 有活动时，通知区域会平滑动画展开，显示当前会话信息。

@@ -15,6 +15,7 @@ struct TerminalAppRegistry: Sendable {
         "iTerm2",
         "iTerm",
         "Ghostty",
+        "cmux",
         "Alacritty",
         "kitty",
         "Hyper",
@@ -31,6 +32,8 @@ struct TerminalAppRegistry: Sendable {
         "Code - Insiders",
         "Cursor",
         "Windsurf",
+        "Antigravity",
+        "Antigravity IDE",
         "zed"
     ]
 
@@ -39,6 +42,7 @@ struct TerminalAppRegistry: Sendable {
         "com.apple.Terminal",
         "com.googlecode.iterm2",
         "com.mitchellh.ghostty",
+        "com.cmuxterm.app",
         "io.alacritty",
         "org.alacritty",
         "net.kovidgoyal.kitty",
@@ -49,6 +53,8 @@ struct TerminalAppRegistry: Sendable {
         "com.microsoft.VSCodeInsiders",
         "com.todesktop.230313mzl4w4u92",  // Cursor
         "com.exafunction.windsurf",
+        "com.google.antigravity",
+        "com.google.antigravity-ide",
         "dev.zed.Zed"
     ]
 

@@ -45,6 +45,7 @@ CLAUDE.md
 *.log
 .playwright-mcp/
 .dsh/
+__pycache__/
 
 # Local data & credentials
 *.sqlite
