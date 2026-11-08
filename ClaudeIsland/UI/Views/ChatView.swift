@@ -444,13 +444,10 @@ struct ChatView: View {
 
     // MARK: - Actions
 
+    /// Return to the originating terminal through the shared focus router.
     private func focusTerminal() {
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
-            }
+            await SessionFocusService.focusOrExplain(session)
         }
     }
 

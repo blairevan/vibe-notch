@@ -24,6 +24,7 @@
 
 - **刘海 UI** — 从 MacBook 刘海区域动画展开的通知覆盖层
 - **实时会话监控** — 同时追踪多个 Claude Code 会话
+- **Antigravity 通知与跳转** — 支持 agy CLI、Antigravity App 和 Antigravity IDE 的任务状态、完成/异常通知及返回来源应用
 - **权限审批** — 直接在刘海区域批准或拒绝工具执行
 - **聊天历史** — 支持 Markdown 渲染的完整对话历史
 - **自动配置** — 首次启动时自动安装 Hooks

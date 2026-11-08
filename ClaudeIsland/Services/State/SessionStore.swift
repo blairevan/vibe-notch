@@ -121,6 +121,10 @@ actor SessionStore {
     // MARK: - Hook Event Processing
 
     private func processHookEvent(_ event: HookEvent) async {
+        if AntigravitySource(rawValue: event.client ?? "") != nil {
+            processAntigravityEvent(event)
+            return
+        }
         let sessionId = event.sessionId
         var session = sessions[sessionId] ?? createSession(from: event)
 
@@ -214,6 +218,40 @@ actor SessionStore {
         if event.shouldSyncFile {
             scheduleFileSync(sessionId: sessionId, cwd: event.cwd)
         }
+    }
+
+    /// Apply metadata-only hooks without scheduling any conversation-file work.
+    private func processAntigravityEvent(_ event: HookEvent) {
+        guard let metadata = event.antigravity,
+              let source = AntigravitySource(rawValue: event.client ?? ""),
+              event.sessionId == "\(source.rawValue):\(metadata.conversationId)" else { return }
+        var session = sessions[event.sessionId] ?? createSession(from: event)
+        // agy may emit SessionStart before it has resolved the mounted workspace.
+        if session.cwd.isEmpty, !event.cwd.isEmpty {
+            session.cwd = event.cwd
+            session.projectName = URL(fileURLWithPath: event.cwd).lastPathComponent
+        }
+        var state = session.antigravity ?? AntigravitySession(conversationId: metadata.conversationId)
+        let wasActive = state.isActive
+        state.apply(event: event.event, metadata: metadata)
+        session.antigravity = state
+        session.conversationInfo.clientName = source.rawValue
+        session.conversationInfo.isSubagent = state.isSubagent
+        session.conversationInfo.isTurnCompleted = state.outcome != nil
+        session.lastActivity = Date()
+        if let pid = event.pid {
+            session.pid = pid
+            let tree = ProcessTreeBuilder.shared.buildTree()
+            session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
+        }
+        if let tty = event.tty { session.tty = tty }
+        if state.isActive {
+            session.phase = .processing
+            if !wasActive { session.turnStartTime = Date() }
+        } else if state.outcome != nil {
+            session.phase = .waitingForInput
+        }
+        sessions[event.sessionId] = session
     }
 
     private func createSession(from event: HookEvent) -> SessionState {
@@ -990,6 +1028,7 @@ actor SessionStore {
     // MARK: - History Loading
 
     private func loadHistoryFromFile(sessionId: String, cwd: String) async {
+        guard sessions[sessionId]?.antigravity == nil else { return }
         // Parse file asynchronously
         let messages = await ConversationParser.shared.parseFullConversation(
             sessionId: sessionId,
@@ -1148,6 +1187,9 @@ actor SessionStore {
                 }
             }
 
+            // A dead host removes the session, but silence never implies success.
+            if session.antigravity != nil { continue }
+
             let needsSync: Bool
             switch session.phase {
             case .processing, .waitingForApproval:
@@ -1187,7 +1229,8 @@ actor SessionStore {
     // MARK: - State Publishing
 
     private func publishState() {
-        let sortedSessions = Array(sessions.values).sorted { $0.projectName < $1.projectName }
+        let sortedSessions = sessions.values.filter { $0.antigravity?.isSubagent != true }
+            .sorted { $0.projectName < $1.projectName }
         sessionsSubject.send(sortedSessions)
     }
 

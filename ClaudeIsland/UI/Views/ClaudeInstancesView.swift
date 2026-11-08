@@ -87,19 +87,19 @@ struct ClaudeInstancesView: View {
 
     // MARK: - Actions
 
+    /// Return to the source application or explain why its window cannot be found.
     private func focusSession(_ session: SessionState) {
-        guard session.isInTmux else { return }
-
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
-            }
+            await SessionFocusService.focusOrExplain(session)
         }
     }
 
+    /// Open supported history, or return metadata-only sessions to their host.
     private func openChat(_ session: SessionState) {
+        if session.antigravity != nil {
+            focusSession(session)
+            return
+        }
         viewModel.showChat(for: session)
     }
 
@@ -147,6 +147,9 @@ struct InstanceRow: View {
 
     /// Status text based on session phase (fallback when no other content)
     private var phaseStatusText: String {
+        if let source = session.antigravitySource {
+            return "\(source.label) · \(session.antigravity?.outcome?.label ?? (session.phase == .processing ? "处理中" : "等待任务"))"
+        }
         switch session.phase {
         case .processing:
             return "Processing..."
@@ -285,13 +288,13 @@ struct InstanceRow: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
                 HStack(spacing: 8) {
-                    // Chat icon - always show
-                    IconButton(icon: "bubble.left") {
+                    // Metadata-only sources return to their originating application.
+                    IconButton(icon: session.antigravity == nil ? "bubble.left" : "arrow.up.forward.app") {
                         onChat()
                     }
 
-                    // Focus icon (only for tmux instances with yabai)
-                    if session.isInTmux && isYabaiAvailable {
+                    // GUI sources can activate their app without yabai.
+                    if session.antigravity != nil || (session.isInTmux && isYabaiAvailable) {
                         IconButton(icon: "eye") {
                             onFocus()
                         }

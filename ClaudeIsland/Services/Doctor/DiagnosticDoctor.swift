@@ -176,6 +176,8 @@ final class DiagnosticDoctor: ObservableObject {
           ))
       }
 
+        items.append(AntigravityHookInstaller.diagnostic())
+
         // 4. Check DSH (DeepSeek Harness) Integration
         let dshDir = home + "/.dsh"
         if fm.fileExists(atPath: dshDir) {

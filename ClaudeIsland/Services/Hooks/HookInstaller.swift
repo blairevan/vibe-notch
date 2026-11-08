@@ -31,6 +31,7 @@ struct HookInstaller {
         updateSettings(at: ClaudePaths.settingsFile)
         installDshPluginIfNeeded()
         installCodexHooksIfNeeded()
+        AntigravityHookInstaller.installIfNeeded()
     }
 
     private static func updateSettings(at settingsURL: URL) {
@@ -246,6 +247,7 @@ struct HookInstaller {
 
     /// Uninstall hooks from settings.json and remove script
     static func uninstall() {
+        AntigravityHookInstaller.uninstall()
         let hooksDir = ClaudePaths.hooksDir
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
         let settings = ClaudePaths.settingsFile

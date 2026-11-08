@@ -44,7 +44,7 @@ class ClaudeSessionMonitor: ObservableObject {
                     await SessionStore.shared.process(.hookReceived(event))
                 }
 
-                if event.sessionPhase == .processing {
+                if event.sessionPhase == .processing && event.antigravity == nil {
                     Task { @MainActor in
                         InterruptWatcherManager.shared.startWatching(
                             sessionId: event.sessionId,

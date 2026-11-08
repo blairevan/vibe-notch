@@ -14,8 +14,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Identity
 
     let sessionId: String
-    let cwd: String
-    let projectName: String
+    var cwd: String
+    var projectName: String
 
     // MARK: - Instance Metadata
 
@@ -46,6 +46,9 @@ struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Conversation Info (from JSONL parsing)
 
     var conversationInfo: ConversationInfo
+
+    /// Event-only integration state; remains nil for existing providers.
+    var antigravity: AntigravitySession? = nil
 
     // MARK: - Clear Reconciliation
 
