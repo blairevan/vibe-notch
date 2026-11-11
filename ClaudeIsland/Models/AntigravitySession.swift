@@ -1,5 +1,18 @@
 import Foundation
 
+/// Structured single question entry emitted by Antigravity's `ask_question` tool.
+nonisolated struct AntigravityQuestionItem: Codable, Equatable, Sendable {
+    let question: String
+    let options: [String]
+    let multiSelect: Bool
+}
+
+/// Bounded question prompt payload captured at `PreToolUse` before blocking on user input.
+nonisolated struct AntigravityQuestionPrompt: Codable, Equatable, Sendable {
+    let stepIdx: Int
+    let questions: [AntigravityQuestionItem]
+}
+
 /// Metadata supplied by the official Antigravity lifecycle hook bridge.
 nonisolated struct AntigravityHookMetadata: Codable, Equatable, Sendable {
     let conversationId: String
@@ -13,6 +26,7 @@ nonisolated struct AntigravityHookMetadata: Codable, Equatable, Sendable {
     var lastUserInput: String? = nil
     var error: String? = nil
     var initialNumSteps: Int? = nil
+    var questionPrompt: AntigravityQuestionPrompt? = nil
 
     /// Classify known host enums conservatively; unknown stops are never successes.
     var outcome: AntigravityOutcome {
@@ -55,6 +69,10 @@ nonisolated struct AntigravitySession: Equatable, Sendable {
     var isSubagent = false
     var initialStep: Int?
     var isLoadingNotification = false
+    var isWaitingForUserInput = false
+    var pendingQuestionID: String?
+    var pendingQuestions: [AntigravityQuestionItem] = []
+    var isLoadingQuestionContext = false
 
     /// Starts an event-only session for one upstream conversation.
     init(conversationId: String) {
@@ -66,17 +84,39 @@ nonisolated struct AntigravitySession: Equatable, Sendable {
         isSubagent = isSubagent || metadata.isSubagent
         switch event {
         case "PreInvocation":
+            isWaitingForUserInput = false
+            pendingQuestions = []
+            isLoadingQuestionContext = false
+            if !isActive {
+                generation += 1
+                outcome = nil
+                completionID = nil
+                pendingQuestionID = nil
+                isActive = true
+                initialStep = metadata.initialNumSteps
+                isLoadingNotification = false
+            }
+        case "PreToolUse":
+            guard let prompt = metadata.questionPrompt, !prompt.questions.isEmpty else { return }
             if !isActive {
                 generation += 1
                 outcome = nil
                 completionID = nil
                 isActive = true
-                initialStep = metadata.initialNumSteps
-                isLoadingNotification = false
             }
+            isWaitingForUserInput = true
+            pendingQuestionID = "\(conversationId):\(generation):q:\(prompt.stepIdx)"
+            pendingQuestions = prompt.questions
+        case "PostToolUse":
+            isWaitingForUserInput = false
+            pendingQuestions = []
+            isLoadingQuestionContext = false
         case "Stop":
             guard isActive, metadata.fullyIdle == true else { return }
             isActive = false
+            isWaitingForUserInput = false
+            pendingQuestions = []
+            isLoadingQuestionContext = false
             outcome = metadata.outcome
             completionID =
                 "\(conversationId):\(generation):\(metadata.executionNum.map(String.init) ?? "stop")"

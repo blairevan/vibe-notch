@@ -18,7 +18,18 @@ enum AntigravityHookInstaller {
             enabled: existing?["enabled"] as? Bool ?? true,
             sessionStart: [Handler(command: "\(command) SessionStart")],
             preInvocation: [Handler(command: "\(command) PreInvocation")],
-            postToolUse: [ToolHandler(hooks: [Handler(command: "\(command) PostToolUse")])],
+            preToolUse: [
+                ToolHandler(
+                    matcher: "ask_question",
+                    hooks: [Handler(command: "\(command) PreToolUse")]
+                )
+            ],
+            postToolUse: [
+                ToolHandler(
+                    matcher: ".*",
+                    hooks: [Handler(command: "\(command) PostToolUse")]
+                )
+            ],
             stop: [Handler(command: "\(command) Stop")]
         )
         root[key] = try JSONDecoder().decode(
@@ -84,6 +95,7 @@ enum AntigravityHookInstaller {
                 if own?["enabled"] as? Bool == false {
                     status = .warning("Antigravity hooks disabled")
                 } else if own?["Stop"] != nil && own?["PreInvocation"] != nil
+                    && own?["PreToolUse"] != nil
                     && FileManager.default.isExecutableFile(atPath: bridge.path)
                 {
                     status = .ok
@@ -140,7 +152,7 @@ enum AntigravityHookInstaller {
 
     /// Tool lifecycle hooks use a matcher wrapper in the official schema.
     private struct ToolHandler: Encodable {
-        let matcher = ".*"
+        let matcher: String
         let hooks: [Handler]
     }
 
@@ -149,6 +161,7 @@ enum AntigravityHookInstaller {
         let enabled: Bool
         let sessionStart: [Handler]
         let preInvocation: [Handler]
+        let preToolUse: [ToolHandler]
         let postToolUse: [ToolHandler]
         let stop: [Handler]
 
@@ -156,6 +169,7 @@ enum AntigravityHookInstaller {
             case enabled
             case sessionStart = "SessionStart"
             case preInvocation = "PreInvocation"
+            case preToolUse = "PreToolUse"
             case postToolUse = "PostToolUse"
             case stop = "Stop"
         }

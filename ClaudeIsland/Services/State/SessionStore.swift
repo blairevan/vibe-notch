@@ -239,10 +239,17 @@ actor SessionStore {
         var state = session.antigravity ?? AntigravitySession(conversationId: metadata.conversationId)
         let wasActive = state.isActive
         let previousCompletion = state.completionID
+        let previousQuestionID = state.pendingQuestionID
         state.apply(event: event.event, metadata: metadata)
         let needsContent = state.completionID != nil && state.completionID != previousCompletion &&
             !state.isSubagent && (state.outcome == .completed || state.outcome == .failed)
+        let needsQuestionContext = state.isWaitingForUserInput &&
+            state.pendingQuestionID != nil &&
+            state.pendingQuestionID != previousQuestionID &&
+            !state.isSubagent &&
+            metadata.transcriptPath != nil
         if needsContent { state.isLoadingNotification = true }
+        if needsQuestionContext { state.isLoadingQuestionContext = true }
         session.antigravity = state
         session.conversationInfo.clientName = source.rawValue
         session.conversationInfo.isSubagent = state.isSubagent
@@ -254,20 +261,44 @@ actor SessionStore {
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
         }
         if let tty = event.tty { session.tty = tty }
-        if state.isActive || state.isLoadingNotification {
+        if let rawPrompt = metadata.lastUserInput {
+            let prompt = AntigravityNotificationContextLoader.cleanHookPrompt(rawPrompt)
+            if !prompt.isEmpty {
+                session.conversationInfo.lastUserMessage = prompt
+                if session.conversationInfo.firstUserMessage == nil {
+                    session.conversationInfo.firstUserMessage = prompt
+                }
+            }
+        }
+        if state.isWaitingForUserInput && !state.isLoadingQuestionContext {
+            session.phase = .waitingForInput
+        } else if state.isActive || state.isLoadingNotification || state.isLoadingQuestionContext {
             session.phase = .processing
             if state.isActive && !wasActive {
                 session.turnStartTime = Date()
                 session.conversationInfo.lastMessage = nil
                 session.conversationInfo.lastErrorMessage = nil
-                let prompt = metadata.lastUserInput.map { ConversationParser.cleanUserPrompt($0) }
-                session.conversationInfo.lastUserMessage = prompt
-                if session.conversationInfo.firstUserMessage == nil { session.conversationInfo.firstUserMessage = prompt }
             }
         } else if state.outcome != nil {
             session.phase = .waitingForInput
         }
         sessions[event.sessionId] = session
+        if needsQuestionContext {
+            let questionMeta = await notificationContextLoader.loadQuestionMetadata(metadata)
+            guard var current = sessions[event.sessionId],
+                  current.antigravity?.pendingQuestionID == state.pendingQuestionID,
+                  current.antigravity?.isWaitingForUserInput == true else { return }
+            if let title = questionMeta.title {
+                current.conversationInfo.summary = title
+            }
+            if let prompt = questionMeta.prompt, !prompt.isEmpty {
+                current.conversationInfo.lastUserMessage = prompt
+            }
+            current.antigravity?.isLoadingQuestionContext = false
+            current.phase = .waitingForInput
+            sessions[event.sessionId] = current
+            return
+        }
         guard needsContent else { return }
         var contextMetadata = metadata
         contextMetadata.lastUserInput = metadata.lastUserInput ?? session.conversationInfo.lastUserMessage

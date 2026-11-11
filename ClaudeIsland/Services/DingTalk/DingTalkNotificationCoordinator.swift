@@ -17,8 +17,10 @@ final class DingTalkNotificationCoordinator {
     private let sleep: (UInt64) async throws -> Void
     private var inFlightCompletions: [String: CompletionFingerprint] = [:]
     private var inFlightPermissions: [String: Set<String>] = [:]
+    private var inFlightQuestions: [String: Set<String>] = [:]
     /// Exhausted permissions are failed, not delivered; snapshots must not reset their retry budget.
     private var failedPermissionIds: [String: Set<String>] = [:]
+    private var failedQuestionIds: [String: Set<String>] = [:]
     private var deliveryGeneration = 0
 
     /// Identifies the state to acknowledge only after successful delivery.
@@ -27,11 +29,13 @@ final class DingTalkNotificationCoordinator {
         let sessionId: String
         let fingerprint: CompletionFingerprint?
         let permissionId: String?
+        let questionId: String?
     }
     private var subscription: AnyCancellable?
     private var hasSeededSnapshot = false
     private var previousPhases: [String: PhaseMarker] = [:]
-   private var notifiedPermissionIds: [String: Set<String>] = [:]
+    private var notifiedPermissionIds: [String: Set<String>] = [:]
+    private var notifiedQuestionIds: [String: Set<String>] = [:]
    /// Last known conversation result captured when a session begins compaction.
    private var compactionBaselines: [String: CompletionFingerprint] = [:]
     /// Last notified completion fingerprint for each session, used for deduplication.
@@ -84,15 +88,18 @@ final class DingTalkNotificationCoordinator {
         deliveryGeneration += 1
         inFlightCompletions.removeAll()
         inFlightPermissions.removeAll()
+        inFlightQuestions.removeAll()
         failedPermissionIds.removeAll()
+        failedQuestionIds.removeAll()
         subscription?.cancel()
         subscription = nil
         processingTask?.cancel()
         processingTask = nil
         hasSeededSnapshot = false
-       previousPhases.removeAll()
-       notifiedPermissionIds.removeAll()
-       compactionBaselines.removeAll()
+        previousPhases.removeAll()
+        notifiedPermissionIds.removeAll()
+        notifiedQuestionIds.removeAll()
+        compactionBaselines.removeAll()
         lastNotifiedCompletions.removeAll()
    }
 
@@ -115,48 +122,70 @@ final class DingTalkNotificationCoordinator {
 
             let isCompletion: Bool
             switch (previousPhase, currentPhase) {
-           case (.processing, .waitingForInput),
-                (.compacting, .waitingForInput),
-                (.waitingForApproval, .waitingForInput):
-               // For Codex sessions: verify with the session's authoritative isTurnCompleted flag.
-               // If an ongoing turn (task_started without task_complete) exists, it is not a turn end.
-               if let state = session.antigravity {
-                   isCompletion = state.completionID != nil && !state.isSubagent &&
-                       state.outcome != .cancelled && state.outcome != .stopped &&
-                       lastNotifiedCompletions[session.sessionId] != fingerprint &&
-                       inFlightCompletions[session.sessionId] != fingerprint
-               } else if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
-                   isCompletion = false
-               } else if session.conversationInfo.isSubagent {
-                   isCompletion = false
-               // Compaction recovery can briefly expose the pre-compaction
-               // assistant response as a waiting state. Suppress if the assistant result has not changed.
-               } else if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
-                   baseline == fingerprint || (baseline.lastMessage != nil && baseline.lastMessage == fingerprint.lastMessage) {
-                   isCompletion = false
-               } else if lastNotifiedCompletions[session.sessionId] == fingerprint || inFlightCompletions[session.sessionId] == fingerprint {
-                   isCompletion = false
-               } else {
-                   isCompletion = fingerprint.hasUserContent
-               }
+            case (.processing, .waitingForInput),
+                 (.compacting, .waitingForInput),
+                 (.waitingForApproval, .waitingForInput):
+                // For Codex sessions: verify with the session's authoritative isTurnCompleted flag.
+                // If an ongoing turn (task_started without task_complete) exists, it is not a turn end.
+                if let state = session.antigravity {
+                    isCompletion = state.completionID != nil && !state.isSubagent && !state.isWaitingForUserInput &&
+                        state.outcome != .cancelled && state.outcome != .stopped &&
+                        lastNotifiedCompletions[session.sessionId] != fingerprint &&
+                        inFlightCompletions[session.sessionId] != fingerprint
+                } else if session.conversationInfo.clientName == "codex" && !session.conversationInfo.isTurnCompleted {
+                    isCompletion = false
+                } else if session.conversationInfo.isSubagent {
+                    isCompletion = false
+                // Compaction recovery can briefly expose the pre-compaction
+                // assistant response as a waiting state. Suppress if the assistant result has not changed.
+                } else if let baseline = compactionBaselines.removeValue(forKey: session.sessionId),
+                    baseline == fingerprint || (baseline.lastMessage != nil && baseline.lastMessage == fingerprint.lastMessage) {
+                    isCompletion = false
+                } else if lastNotifiedCompletions[session.sessionId] == fingerprint || inFlightCompletions[session.sessionId] == fingerprint {
+                    isCompletion = false
+                } else {
+                    isCompletion = fingerprint.hasUserContent
+                }
+            case (.waitingForInput, .waitingForInput):
+                if let state = session.antigravity {
+                    isCompletion = state.completionID != nil && !state.isSubagent && !state.isWaitingForUserInput &&
+                        state.outcome != .cancelled && state.outcome != .stopped &&
+                        lastNotifiedCompletions[session.sessionId] != fingerprint &&
+                        inFlightCompletions[session.sessionId] != fingerprint
+                } else {
+                    isCompletion = false
+                }
             default:
                 isCompletion = false
             }
 
-           if currentPhase == .compacting {
+            if currentPhase == .compacting {
                 compactionBaselines[session.sessionId] = fingerprint
-           }
+            }
 
             let logLine = "[\(getpid())] [coordinator] eval session=\(session.sessionId.prefix(8)) cur=\(currentPhase) prev=\(String(describing: previousPhase)) isCompletion=\(isCompletion)\n"
             if let d = logLine.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/vibe-notch-flow.log") {
                 fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }
 
-           if isCompletion {
+            if isCompletion {
                 inFlightCompletions[session.sessionId] = fingerprint
-               Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
-               messages.append(Delivery(message: taskCompletedMessage(for: session), sessionId: session.sessionId, fingerprint: fingerprint, permissionId: nil))
-           }
+                Self.logger.info("[DingTalk Debug] SENDING task completed notification for \(session.sessionId.prefix(8), privacy: .public)")
+                messages.append(Delivery(message: taskCompletedMessage(for: session), sessionId: session.sessionId, fingerprint: fingerprint, permissionId: nil, questionId: nil))
+            }
+
+            if let state = session.antigravity,
+               state.isWaitingForUserInput,
+               !state.isLoadingQuestionContext,
+               !state.isSubagent,
+               let questionId = state.pendingQuestionID,
+               !state.pendingQuestions.isEmpty,
+               notifiedQuestionIds[session.sessionId]?.contains(questionId) != true,
+               inFlightQuestions[session.sessionId]?.contains(questionId) != true,
+               failedQuestionIds[session.sessionId]?.contains(questionId) != true {
+                inFlightQuestions[session.sessionId, default: []].insert(questionId)
+                messages.append(Delivery(message: antigravityQuestionMessage(for: session, questions: state.pendingQuestions), sessionId: session.sessionId, fingerprint: nil, permissionId: nil, questionId: questionId))
+            }
 
             if case .waitingForApproval(let toolUseId) = currentPhase,
                session.conversationInfo.allowsApprovalNotification {
@@ -164,7 +193,7 @@ final class DingTalkNotificationCoordinator {
                    inFlightPermissions[session.sessionId]?.contains(toolUseId) != true,
                    failedPermissionIds[session.sessionId]?.contains(toolUseId) != true {
                     inFlightPermissions[session.sessionId, default: []].insert(toolUseId)
-                    messages.append(Delivery(message: permissionMessage(for: session), sessionId: session.sessionId, fingerprint: nil, permissionId: toolUseId))
+                    messages.append(Delivery(message: permissionMessage(for: session), sessionId: session.sessionId, fingerprint: nil, permissionId: toolUseId, questionId: nil))
                 }
             }
 
@@ -175,26 +204,31 @@ final class DingTalkNotificationCoordinator {
     }
 
     /// Seeds current phases and permissions without generating historical messages.
-   private func seedSnapshot(_ sessions: [SessionState]) {
-       hasSeededSnapshot = true
-       for session in sessions {
-           let phase = PhaseMarker(session.phase)
-           previousPhases[session.sessionId] = phase
-           if case .waitingForApproval(let toolUseId) = phase {
-               notifiedPermissionIds[session.sessionId] = [toolUseId]
-           }
-       }
-   }
+    private func seedSnapshot(_ sessions: [SessionState]) {
+        hasSeededSnapshot = true
+        for session in sessions {
+            let phase = PhaseMarker(session.phase)
+            previousPhases[session.sessionId] = phase
+            if case .waitingForApproval(let toolUseId) = phase {
+                notifiedPermissionIds[session.sessionId] = [toolUseId]
+            }
+            if let qid = session.antigravity?.pendingQuestionID, session.antigravity?.isWaitingForUserInput == true {
+                notifiedQuestionIds[session.sessionId] = [qid]
+            }
+        }
+    }
 
     /// Removes state belonging to sessions no longer present in the snapshot.
     private func removeStateForMissingSessions(_ sessions: [SessionState]) {
         let activeIds = Set(sessions.map(\.sessionId))
-       previousPhases = previousPhases.filter { activeIds.contains($0.key) }
-       notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
+        previousPhases = previousPhases.filter { activeIds.contains($0.key) }
+        notifiedPermissionIds = notifiedPermissionIds.filter { activeIds.contains($0.key) }
+        notifiedQuestionIds = notifiedQuestionIds.filter { activeIds.contains($0.key) }
         failedPermissionIds = failedPermissionIds.filter { activeIds.contains($0.key) }
-       compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
+        failedQuestionIds = failedQuestionIds.filter { activeIds.contains($0.key) }
+        compactionBaselines = compactionBaselines.filter { activeIds.contains($0.key) }
         lastNotifiedCompletions = lastNotifiedCompletions.filter { activeIds.contains($0.key) }
-   }
+    }
 
     /// Sends generated messages when enabled credentials are available.
     private func sendMessagesIfConfigured(_ messages: [Delivery]) async {
@@ -207,6 +241,9 @@ final class DingTalkNotificationCoordinator {
                     }
                     if let id = delivery.permissionId {
                         inFlightPermissions[delivery.sessionId]?.remove(id)
+                    }
+                    if let qid = delivery.questionId {
+                        inFlightQuestions[delivery.sessionId]?.remove(qid)
                     }
                 }
             }
@@ -237,8 +274,16 @@ final class DingTalkNotificationCoordinator {
                 if let id = delivery.permissionId {
                     notifiedPermissionIds[delivery.sessionId, default: []].insert(id)
                 }
-            } else if generation == deliveryGeneration, let id = delivery.permissionId {
-                failedPermissionIds[delivery.sessionId, default: []].insert(id)
+                if let qid = delivery.questionId {
+                    notifiedQuestionIds[delivery.sessionId, default: []].insert(qid)
+                }
+            } else if generation == deliveryGeneration {
+                if let id = delivery.permissionId {
+                    failedPermissionIds[delivery.sessionId, default: []].insert(id)
+                }
+                if let qid = delivery.questionId {
+                    failedQuestionIds[delivery.sessionId, default: []].insert(qid)
+                }
             }
         }
     }
@@ -334,6 +379,26 @@ final class DingTalkNotificationCoordinator {
             - **终端**：\(terminalInfo)
             - **时间**：\(timeString)
             """
+        )
+    }
+
+    /// Creates a dedicated Markdown message when an Antigravity session pauses on `ask_question`.
+    private func antigravityQuestionMessage(for session: SessionState, questions: [AntigravityQuestionItem]) -> DingTalkMessage {
+        let rawProject = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectName = (rawProject.isEmpty || rawProject == "/") ? "Default" : safeValue(rawProject, fallback: "Default")
+        let sourceLabel = session.antigravitySource?.label ?? "Antigravity"
+        let subject = extractSubject(from: session)
+        let prompt = extractLastUserPrompt(from: session)
+        let terminalInfo = extractTerminalInfo(from: session)
+        let timeString = formattedTime()
+        return AntigravityQuestionNotificationFormatter.makeMessage(
+            projectName: projectName,
+            sourceLabel: sourceLabel,
+            subject: subject,
+            prompt: prompt,
+            questions: questions,
+            terminalInfo: terminalInfo,
+            timeString: timeString
         )
     }
 
