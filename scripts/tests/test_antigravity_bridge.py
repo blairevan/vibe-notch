@@ -142,6 +142,64 @@ class AntigravityBridgeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(json.loads(result.stdout), {})
 
+    def test_pre_tool_use_ask_question_array_and_json_string(self):
+        """ask_question PreToolUse emits waiting_for_input and normalizes array or JSON-string questions."""
+        bridge = self.load_bridge()
+        raw_questions = [
+            {
+                "question": "统一采用哪种来源命名？",
+                "options": ["(Recommended) 英文", "中文", "   "],
+                "is_multi_select": False,
+            },
+            {
+                "question": "需要同步哪些端？",
+                "options": ["Web", "Telegram", "DingTalk"],
+                "is_multi_select": True,
+            },
+        ]
+        for encoded in (raw_questions, json.dumps(raw_questions, ensure_ascii=False)):
+            with self.subTest(kind=type(encoded).__name__):
+                payload = {
+                    "conversationId": "ask-conv",
+                    "stepIdx": 42,
+                    "workspacePaths": ["/workspace/toolhub"],
+                    "transcriptPath": "/home/test/.gemini/antigravity/brain/ask-conv/.system_generated/logs/transcript.jsonl",
+                    "lastUserInput": "<USER_REQUEST>对齐命名规范</USER_REQUEST>",
+                    "toolCall": {
+                        "name": "ask_question",
+                        "args": {"questions": encoded},
+                    },
+                }
+                event = bridge.normalize_event("PreToolUse", payload)
+                self.assertIsNotNone(event)
+                self.assertEqual(event["status"], "waiting_for_input")
+                self.assertEqual(event["client"], "antigravity")
+                self.assertEqual(event["antigravity"]["lastUserInput"], payload["lastUserInput"])
+                self.assertEqual(event["antigravity"]["transcriptPath"], payload["transcriptPath"])
+                prompt = event["antigravity"]["questionPrompt"]
+                self.assertEqual(prompt["stepIdx"], 42)
+                self.assertEqual(len(prompt["questions"]), 2)
+                self.assertEqual(prompt["questions"][0]["question"], "统一采用哪种来源命名？")
+                self.assertEqual(prompt["questions"][0]["options"], ["(Recommended) 英文", "中文"])
+                self.assertFalse(prompt["questions"][0]["multiSelect"])
+                self.assertTrue(prompt["questions"][1]["multiSelect"])
+
+    def test_pre_tool_use_non_ask_question_is_ignored_and_cli_prints_empty_json(self):
+        """Unrelated PreToolUse payloads never emit socket frames and still output neutral JSON."""
+        bridge = self.load_bridge()
+        payload = {
+            "conversationId": "ask-conv",
+            "stepIdx": 7,
+            "toolCall": {"name": "read_file", "args": {"Path": "/tmp/demo"}},
+        }
+        self.assertIsNone(bridge.normalize_event("PreToolUse", payload))
+        result = subprocess.run(
+            ["python3", str(BRIDGE), "PreToolUse", "--socket", "/nonexistent/vibe-test.sock"],
+            input=json.dumps(payload), text=True, capture_output=True, timeout=3,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout), {})
+
 
 if __name__ == "__main__":
     unittest.main()

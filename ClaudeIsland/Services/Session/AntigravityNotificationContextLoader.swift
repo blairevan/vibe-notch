@@ -57,6 +57,21 @@ actor AntigravityNotificationContextLoader {
         return result
     }
 
+    /// Perform a single non-blocking read of the conversation title and stripped user prompt for ask_question notifications.
+    func loadQuestionMetadata(_ metadata: AntigravityHookMetadata) -> (title: String?, prompt: String?) {
+        let prompt = metadata.lastUserInput.map { Self.userRequest($0) }
+        guard let (_, root) = validatedLocation(metadata) else {
+            return (nil, prompt)
+        }
+        let title = readTitle(root: root, conversationId: metadata.conversationId)
+        return (title, prompt)
+    }
+
+    /// Unwrap `<USER_REQUEST>` tags and clean a user prompt string without reading disk.
+    nonisolated static func cleanHookPrompt(_ raw: String) -> String {
+        userRequest(raw)
+    }
+
     /// Require the exact conversation log under an allowed product root; reject symlink escapes.
     private func validatedLocation(_ metadata: AntigravityHookMetadata) -> (URL, URL)? {
         guard let path = metadata.transcriptPath, path.hasPrefix("/"),
