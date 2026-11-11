@@ -148,6 +148,9 @@ struct InstanceRow: View {
     /// Status text based on session phase (fallback when no other content)
     private var phaseStatusText: String {
         if let source = session.antigravitySource {
+            if session.antigravity?.isWaitingForUserInput == true {
+                return "\(source.label) · 等待输入"
+            }
             return "\(source.label) · \(session.antigravity?.outcome?.label ?? (session.phase == .processing ? "处理中" : "等待任务"))"
         }
         switch session.phase {

@@ -330,7 +330,7 @@ final class DingTalkNotificationCoordinator {
         let hasError = session.antigravity?.outcome == .failed || !(session.conversationInfo.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         let title = hasError ? "Vibe Notch - Task Error" : "Vibe Notch - Task Completed"
         let header = hasError ? "### ⚠️ Vibe Notch - 任务异常中断" : "### 🚀 Vibe Notch - 任务已完成"
-        let status = hasError ? "❌ 执行中断 (遇到错误)" : "✅ 执行完成 (等待输入)"
+        let status = hasError ? "❌ 执行中断 (遇到错误)" : "✅ 执行完成"
         let resultHeader = hasError ? "**异常信息**" : "**最新结果**"
 
         return DingTalkMessage(
@@ -495,7 +495,7 @@ final class DingTalkNotificationCoordinator {
         guard let lastMsg = session.conversationInfo.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
               !lastMsg.isEmpty else {
             if session.antigravity != nil { return "未能获取本轮最终回复，请返回原会话查看。" }
-            return "已完成当前执行，等待进一步输入。"
+            return "已完成当前执行。"
         }
         let cleanText = lastMsg.replacingOccurrences(of: "\r\n", with: "\n")
         if cleanText.count <= 400 {
