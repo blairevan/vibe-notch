@@ -83,7 +83,10 @@ final class AntigravityQuestionNotificationTests: XCTestCase {
         XCTAssertEqual(finished.phase, .waitingForInput)
         await coordinator.processSnapshot([finished])
         XCTAssertEqual(messages.count, 2)
-        XCTAssertEqual(messages.last?.title, "Vibe Notch - Task Completed")
+        let completionMsg = try XCTUnwrap(messages.last)
+        XCTAssertEqual(completionMsg.title, "Vibe Notch - Task Completed")
+        XCTAssertTrue(completionMsg.text.contains("- **状态**：✅ 执行完成"))
+        XCTAssertFalse(completionMsg.text.contains("等待输入"), "Normal completion must not claim 等待输入:\n\(completionMsg.text)")
 
         await store.process(.sessionEnded(sessionId: id))
     }
