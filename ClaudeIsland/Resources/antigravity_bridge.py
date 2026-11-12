@@ -2,10 +2,12 @@
 """Forward Antigravity lifecycle and approved notification context to Vibe Notch."""
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 
@@ -56,6 +58,72 @@ def _normalize_question_prompt(payload):
     return {"stepIdx": step_idx, "questions": questions}
 
 
+def _non_empty_str(value, limit):
+    """Return a bounded string when non-whitespace characters exist, else None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value[:limit]
+
+
+def _is_subagent_in_db(data_root, conversation_id):
+    """Inspect read-only conversation_summaries.db for upstream subagent lineage."""
+    if data_root is None:
+        return False
+    db_path = data_root / "conversation_summaries.db"
+    try:
+        if not db_path.is_file() or db_path.is_symlink():
+            return False
+        uri = db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.05)) as conn:
+            row = conn.execute(
+                "SELECT parent_conversation_id, nesting_depth, agent_name "
+                "FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            return False
+        parent_id, depth, agent_name = row
+        return (
+            (isinstance(parent_id, str) and bool(parent_id.strip()))
+            or (isinstance(depth, int) and depth > 0)
+            or (isinstance(agent_name, str) and bool(agent_name.strip()))
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        return False
+
+
+def _is_subagent_in_transcript(data_root, conversation_id, transcript_path):
+    """Detect agent-spawned transcripts whose step 0 is an inter-agent SYSTEM_MESSAGE."""
+    if data_root is None or not isinstance(transcript_path, str) or not transcript_path.startswith("/"):
+        return False
+    try:
+        candidate = Path(transcript_path)
+        if candidate.name not in {"transcript.jsonl", "transcript_full.jsonl"} or candidate.is_symlink():
+            return False
+        canonical_root = data_root.resolve()
+        expected = canonical_root / "brain" / conversation_id / ".system_generated/logs" / candidate.name
+        resolved = candidate.resolve()
+        if resolved != expected or not resolved.is_file():
+            return False
+        with resolved.open("rb") as handle:
+            first_line = handle.readline(65536)
+        if not first_line or len(first_line) == 65536 and not first_line.endswith(b"\n"):
+            return False
+        step = json.loads(first_line)
+        if not isinstance(step, dict):
+            return False
+        content = step.get("content")
+        return (
+            step.get("step_index") == 0
+            and step.get("type") == "SYSTEM_MESSAGE"
+            and isinstance(content, str)
+            and "[Message]" in content
+            and "sender=" in content
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def normalize_event(event_name, payload):
     """Translate lifecycle fields and the context needed for a current-turn notification."""
     if event_name not in EVENTS or not isinstance(payload, dict):
@@ -63,12 +131,15 @@ def normalize_event(event_name, payload):
     conversation = payload.get("conversationId")
     if not isinstance(conversation, str) or not conversation or len(conversation) > 200:
         return None
+    if "/" in conversation or conversation in {".", ".."}:
+        return None
     question_prompt = None
     if event_name == "PreToolUse":
         question_prompt = _normalize_question_prompt(payload)
         if question_prompt is None:
             return None
     source = "antigravity-unknown"
+    data_root = None
     for field in ("transcriptPath", "artifactDirectoryPath"):
         path = payload.get(field)
         if not isinstance(path, str):
@@ -78,15 +149,23 @@ def normalize_event(event_name, payload):
         for index, part in enumerate(parts[:-1]):
             if part in SOURCES and (parts[index + 1] == "brain" or (index > 0 and parts[index - 1] == ".gemini")):
                 source = part
+                if path.startswith("/"):
+                    data_root = Path(*parts[: index + 1])
                 break
         if source != "antigravity-unknown":
             break
+    is_subagent = (
+        payload.get("isSubagent") is True
+        or bool(_non_empty_str(payload.get("parentConversationId"), 200))
+        or _is_subagent_in_db(data_root, conversation)
+        or _is_subagent_in_transcript(data_root, conversation, payload.get("transcriptPath"))
+    )
     workspaces = payload.get("workspacePaths")
     cwd = next((p for p in workspaces if isinstance(p, str) and p.startswith("/")), "") if isinstance(workspaces, list) else ""
     metadata = {
         "conversationId": conversation,
-        "hasError": bool(payload.get("error")),
-        "isSubagent": payload.get("isSubagent") is True or bool(payload.get("parentConversationId")),
+        "hasError": bool(_non_empty_str(payload.get("error"), 65536) or (payload.get("error") and not isinstance(payload.get("error"), str))),
+        "isSubagent": is_subagent,
     }
     for key in ("executionNum", "invocationNum", "initialNumSteps"):
         value = payload.get(key)
@@ -96,9 +175,10 @@ def normalize_event(event_name, payload):
         metadata["fullyIdle"] = payload["fullyIdle"]
     if event_name in {"PreInvocation", "PreToolUse", "Stop"}:
         for key in ("transcriptPath", "lastUserInput", "error"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                metadata[key] = value[:65536] if key != "transcriptPath" else value[:4096]
+            limit = 4096 if key == "transcriptPath" else 65536
+            bounded = _non_empty_str(payload.get(key), limit)
+            if bounded is not None:
+                metadata[key] = bounded
     if question_prompt is not None:
         metadata["questionPrompt"] = question_prompt
     reason = payload.get("terminationReason")

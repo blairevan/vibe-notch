@@ -207,6 +207,125 @@ final class AntigravityContextLoaderTests: XCTestCase {
         XCTAssertEqual(content.error, "Current failure")
         XCTAssertNil(content.response)
     }
+
+    /// Upstream subagent rows in conversation_summaries.db must suppress completion and question notifications even when the hook omits isSubagent.
+    func testDatabaseLineageSuppressesSubagentWhenHookOmitsFlag() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.writeSummaryRow(
+            title: "",
+            parentConversationId: "parent-session-uuid",
+            nestingDepth: 1,
+            agentName: "browser"
+        )
+        try fixture.write(
+            """
+            {"type":"SYSTEM_MESSAGE","step_index":0,"content":"<SYSTEM_MESSAGE>\\nTask brief\\n</SYSTEM_MESSAGE>"}
+            {"type":"PLANNER_RESPONSE","step_index":1,"content":"Batch 1 verified"}
+            """)
+        let store = SessionStore(notificationContextLoader: fixture.loader)
+        var messages: [DingTalkMessage] = []
+        let coordinator = DingTalkNotificationCoordinator(
+            credentialStore: LoaderTestCredentials(),
+            isEnabled: { true },
+            send: { message, _ in messages.append(message) }
+        )
+        await coordinator.processSnapshot([])
+
+        var metadata = fixture.metadata()
+        metadata.lastUserInput = ""
+        metadata.initialNumSteps = 0
+        await store.process(.hookReceived(hook("PreInvocation", metadata: metadata)))
+        if let active = await store.session(for: "antigravity-cli:one") {
+            await coordinator.processSnapshot([active])
+        }
+        await store.process(.hookReceived(hook("Stop", metadata: metadata)))
+        let finishedRaw = await store.session(for: "antigravity-cli:one")
+        let finished = try XCTUnwrap(finishedRaw)
+        XCTAssertEqual(finished.antigravity?.isSubagent, true)
+        XCTAssertTrue(finished.conversationInfo.isSubagent)
+        await coordinator.processSnapshot([finished])
+        XCTAssertTrue(messages.isEmpty)
+
+        let questionContext = await fixture.loader.loadQuestionMetadata(metadata)
+        XCTAssertTrue(questionContext.isSubagent)
+    }
+
+    /// Before SQLite flushes, a step-0 inter-agent SYSTEM_MESSAGE must also mark the session as a subagent.
+    func testStepZeroInterAgentMessageSuppressesSubagentWithoutDatabase() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write(
+            """
+            {"type":"SYSTEM_MESSAGE","step_index":0,"content":"The following is a <SYSTEM_MESSAGE>\\n\\n<SYSTEM_MESSAGE>\\n[Message] timestamp=2026-11-12T05:54:39Z sender=parent-session-uuid priority=HIGH content=Inspect browser\\n</SYSTEM_MESSAGE>"}
+            {"type":"PLANNER_RESPONSE","step_index":1,"content":"Completed browser check"}
+            """)
+        var metadata = fixture.metadata()
+        metadata.lastUserInput = nil
+        let content = await fixture.loader.load(
+            metadata: metadata, initialStep: 0, startedAt: .distantPast)
+        XCTAssertTrue(content.isSubagent)
+    }
+
+    /// Reactive wakeup Stop payloads with an empty lastUserInput string must preserve the cached user prompt and extract the final answer.
+    func testEmptyStringStopPromptPreservesUserRequestOnReactiveWakeup() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.title("Local Browser Access Request")
+        let store = SessionStore(notificationContextLoader: fixture.loader)
+        var startMeta = fixture.metadata()
+        startMeta.lastUserInput = "<USER_REQUEST>\n已登录，请执行浏览器校验\n</USER_REQUEST>"
+        startMeta.initialNumSteps = 1
+        await store.process(.hookReceived(hook("PreInvocation", metadata: startMeta)))
+
+        try fixture.write(
+            """
+            {"type":"USER_INPUT","step_index":0,"content":"<USER_REQUEST>\\n已登录，请执行浏览器校验\\n</USER_REQUEST>"}
+            {"type":"PLANNER_RESPONSE","step_index":1,"content":"","tool_calls":[{}]}
+            {"type":"SYSTEM_MESSAGE","step_index":2,"content":"<SYSTEM_MESSAGE>\\n[Message] sender=subagent content=Done\\n</SYSTEM_MESSAGE>"}
+            {"type":"PLANNER_RESPONSE","step_index":3,"content":"第一批实测已完成"}
+            """)
+        var stopMeta = startMeta
+        stopMeta.lastUserInput = "   "
+        await store.process(.hookReceived(hook("Stop", metadata: stopMeta)))
+        let completedRaw = await store.session(for: "antigravity-cli:one")
+        let completed = try XCTUnwrap(completedRaw)
+        XCTAssertEqual(completed.conversationInfo.summary, "Local Browser Access Request")
+        XCTAssertEqual(completed.conversationInfo.lastUserMessage, "已登录，请执行浏览器校验")
+        XCTAssertEqual(completed.conversationInfo.lastMessage, "第一批实测已完成")
+    }
+
+    /// When Vibe Notch restarts mid-turn and receives Stop without a cached prompt, the loader anchors to the latest USER_INPUT in the transcript.
+    func testMissingPromptRecoversLatestUserInputFromTranscript() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write(
+            """
+            {"type":"USER_INPUT","step_index":0,"content":"第一轮问题"}
+            {"type":"PLANNER_RESPONSE","step_index":1,"content":"第一轮回答"}
+            {"type":"USER_INPUT","step_index":2,"content":"<USER_REQUEST>\\n第二轮问题\\n</USER_REQUEST>"}
+            {"type":"PLANNER_RESPONSE","step_index":3,"content":"第二轮最终回答"}
+            """)
+        var metadata = fixture.metadata()
+        metadata.lastUserInput = nil
+        let content = await fixture.loader.load(
+            metadata: metadata, initialStep: 3, startedAt: .distantPast)
+        XCTAssertEqual(content.prompt, "第二轮问题")
+        XCTAssertEqual(content.response, "第二轮最终回答")
+    }
+}
+
+/// Synthetic credentials used to verify subagent suppression end-to-end.
+@MainActor
+private final class LoaderTestCredentials: DingTalkCredentialStoring {
+    /// Return a deterministic test token without touching Keychain or disk.
+    func load() throws -> DingTalkCredentials {
+        DingTalkCredentials(token: "fixture", signingSecret: "")
+    }
+    /// Ignore saves in tests.
+    func save(_ credentials: DingTalkCredentials) throws {}
+    /// Ignore clears in tests.
+    func clear() throws {}
 }
 
 /// Coordinates a real suspended read without polling or wall-clock sleeps.
@@ -275,6 +394,43 @@ private struct Fixture {
             "CREATE TABLE conversation_summaries (conversation_id TEXT, title TEXT); INSERT INTO conversation_summaries VALUES ('one','\(title.replacingOccurrences(of: "'", with: "''"))');"
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
             throw NSError(domain: "FixtureSQLite", code: 2)
+        }
+    }
+
+    /// Create the full upstream summary schema including subagent lineage columns.
+    func writeSummaryRow(
+        title: String,
+        parentConversationId: String,
+        nestingDepth: Int,
+        agentName: String
+    ) throws {
+        var db: OpaquePointer?
+        guard
+            sqlite3_open(root.appendingPathComponent("conversation_summaries.db").path, &db)
+                == SQLITE_OK
+        else {
+            throw NSError(domain: "FixtureSQLite", code: 3)
+        }
+        defer { sqlite3_close(db) }
+        let esc = { (s: String) in s.replacingOccurrences(of: "'", with: "''") }
+        let sql = """
+            CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                parent_conversation_id TEXT NOT NULL DEFAULT '',
+                nesting_depth INTEGER NOT NULL DEFAULT 0,
+                agent_name TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO conversation_summaries VALUES (
+                'one',
+                '\(esc(title))',
+                '\(esc(parentConversationId))',
+                \(nestingDepth),
+                '\(esc(agentName))'
+            );
+            """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "FixtureSQLite", code: 4)
         }
     }
 
