@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -199,6 +200,71 @@ class AntigravityBridgeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout), {})
+
+    def test_db_lineage_marks_subagent_when_hook_omits_flag(self):
+        """Browser and worker subagents stored in conversation_summaries.db are marked as subagents."""
+        bridge = self.load_bridge()
+        with tempfile.TemporaryDirectory(prefix="agy-db-") as directory:
+            root = Path(directory) / ".gemini/antigravity"
+            log_dir = root / "brain/sub-conv/.system_generated/logs"
+            log_dir.mkdir(parents=True)
+            log_file = log_dir / "transcript.jsonl"
+            log_file.write_text("", encoding="utf-8")
+            db_file = root / "conversation_summaries.db"
+            conn = sqlite3.connect(str(db_file))
+            conn.execute(
+                "CREATE TABLE conversation_summaries ("
+                "conversation_id TEXT PRIMARY KEY, title TEXT, "
+                "parent_conversation_id TEXT, nesting_depth INTEGER, agent_name TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES "
+                "('sub-conv', '', 'parent-conv', 1, 'browser'), "
+                "('top-conv', 'Main Task', '', 0, '')"
+            )
+            conn.commit()
+            conn.close()
+
+            sub_payload = {
+                "conversationId": "sub-conv",
+                "workspacePaths": ["/opt/app/ai-xuetang"],
+                "transcriptPath": str(log_file),
+                "lastUserInput": "   ",
+                "fullyIdle": True,
+                "terminationReason": "NO_TOOL_CALL",
+            }
+            sub_event = bridge.normalize_event("Stop", sub_payload)
+            self.assertTrue(sub_event["antigravity"]["isSubagent"])
+            self.assertNotIn("lastUserInput", sub_event["antigravity"])
+
+            top_log = root / "brain/top-conv/.system_generated/logs/transcript.jsonl"
+            top_log.parent.mkdir(parents=True)
+            top_log.write_text("", encoding="utf-8")
+            top_payload = dict(sub_payload, conversationId="top-conv", transcriptPath=str(top_log))
+            top_event = bridge.normalize_event("Stop", top_payload)
+            self.assertFalse(top_event["antigravity"]["isSubagent"])
+
+    def test_transcript_step_zero_inter_agent_message_marks_subagent(self):
+        """Before SQLite flushes, step 0 SYSTEM_MESSAGE with [Message] sender= identifies a subagent."""
+        bridge = self.load_bridge()
+        with tempfile.TemporaryDirectory(prefix="agy-step0-") as directory:
+            root = Path(directory) / ".gemini/antigravity"
+            log_file = root / "brain/sub-zero/.system_generated/logs/transcript.jsonl"
+            log_file.parent.mkdir(parents=True)
+            step0 = {
+                "step_index": 0,
+                "type": "SYSTEM_MESSAGE",
+                "content": "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-12T05:54:39Z sender=parent-uuid content=Open browser\n</SYSTEM_MESSAGE>",
+            }
+            log_file.write_text(json.dumps(step0) + "\n", encoding="utf-8")
+            payload = {
+                "conversationId": "sub-zero",
+                "transcriptPath": str(log_file),
+                "fullyIdle": True,
+                "terminationReason": "NO_TOOL_CALL",
+            }
+            event = bridge.normalize_event("PreInvocation", payload)
+            self.assertTrue(event["antigravity"]["isSubagent"])
 
 
 if __name__ == "__main__":

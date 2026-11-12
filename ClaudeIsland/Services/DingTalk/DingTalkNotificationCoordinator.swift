@@ -414,25 +414,28 @@ final class DingTalkNotificationCoordinator {
     /// Extracts the session subject/summary with fallbacks, checking DSH and Codex SQLite thread title first.
     private func extractSubject(from session: SessionState) -> String {
         if session.antigravity != nil {
-            return safeValue(session.conversationInfo.summary ?? session.conversationInfo.firstUserMessage ?? "未命名会话", fallback: "未命名会话")
+            let candidate = nonEmpty(session.conversationInfo.summary)
+                ?? nonEmpty(session.conversationInfo.firstUserMessage)
+                ?? nonEmpty(session.conversationInfo.lastUserMessage)
+            return safeValue(candidate ?? "未命名会话", fallback: "未命名会话")
         }
         if session.conversationInfo.clientName == "dsh" || session.cwd.contains(".dsh") {
-            if let summary = session.conversationInfo.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let summary = nonEmpty(session.conversationInfo.summary) {
                 return safeValue(summary, fallback: "未命名会话")
             }
-            if let firstUser = session.conversationInfo.firstUserMessage, !firstUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let firstUser = nonEmpty(session.conversationInfo.firstUserMessage) {
                 return safeValue(firstUser, fallback: "未命名会话")
             }
             return "未命名会话"
         }
 
-        if let dbTitle = fetchCodexThreadTitle(sessionId: session.sessionId), !dbTitle.isEmpty {
+        if let dbTitle = nonEmpty(fetchCodexThreadTitle(sessionId: session.sessionId)) {
             return safeValue(dbTitle, fallback: "未命名会话")
         }
-        if let summary = session.conversationInfo.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let summary = nonEmpty(session.conversationInfo.summary) {
             return safeValue(summary, fallback: "未命名会话")
         }
-        if let firstUser = session.conversationInfo.firstUserMessage, !firstUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let firstUser = nonEmpty(session.conversationInfo.firstUserMessage) {
             return safeValue(firstUser, fallback: "未命名会话")
         }
         return "未命名会话"
@@ -467,8 +470,10 @@ final class DingTalkNotificationCoordinator {
 
     /// Extracts the latest user prompt in the current turn.
     private func extractLastUserPrompt(from session: SessionState) -> String {
-        let prompt = session.conversationInfo.lastUserMessage ?? session.conversationInfo.firstUserMessage ?? "未提供任务描述"
-        let cleanText = prompt.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\r\n", with: "\n")
+        let prompt = nonEmpty(session.conversationInfo.lastUserMessage)
+            ?? nonEmpty(session.conversationInfo.firstUserMessage)
+            ?? "未提供任务描述"
+        let cleanText = prompt.replacingOccurrences(of: "\r\n", with: "\n")
         if cleanText.count <= 300 {
             return formatBlockquote(cleanText)
         } else {
@@ -476,6 +481,15 @@ final class DingTalkNotificationCoordinator {
             let tail = String(cleanText.suffix(150))
             return formatBlockquote("\(head)\n...\n\(tail)")
         }
+    }
+
+    /// Returns a trimmed string when non-empty, treating whitespace-only text as nil.
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     /// Extracts and formats the latest assistant response, keeping head 200 + tail 200 chars when > 400.

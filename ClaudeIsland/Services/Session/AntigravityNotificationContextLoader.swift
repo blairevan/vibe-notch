@@ -7,6 +7,14 @@ nonisolated struct AntigravityNotificationContent: Sendable {
     var prompt: String?
     var response: String?
     var error: String?
+    var isSubagent = false
+}
+
+/// Metadata resolved synchronously before emitting an `ask_question` notification.
+nonisolated struct AntigravityQuestionContext: Sendable {
+    var title: String?
+    var prompt: String?
+    var isSubagent = false
 }
 
 /// Reads only the referenced conversation, with bounded tail reads and retry time.
@@ -36,18 +44,32 @@ actor AntigravityNotificationContextLoader {
     func load(metadata: AntigravityHookMetadata, initialStep: Int?, startedAt: Date) async
         -> AntigravityNotificationContent
     {
+        let cleanedPrompt = Self.nonEmpty(metadata.lastUserInput.map(Self.userRequest))
         var result = AntigravityNotificationContent(
-            prompt: metadata.lastUserInput.map { Self.userRequest($0) },
-            error: metadata.error)
+            prompt: cleanedPrompt,
+            error: metadata.error,
+            isSubagent: metadata.isSubagent)
         guard let (file, root) = validatedLocation(metadata) else { return result }
         for attempt in 0..<4 {
             if Task.isCancelled { return result }
-            result.title =
-                readTitle(root: root, conversationId: metadata.conversationId) ?? result.title
+            let summary = readSummary(root: root, conversationId: metadata.conversationId)
+            result.title = summary.title ?? result.title
+            if summary.isSubagent {
+                result.isSubagent = true
+                return result
+            }
+            if let head = try? readHead(file), Self.isSubagentTranscript(in: head) {
+                result.isSubagent = true
+                return result
+            }
             if let data = try? readTail(file) {
-                result.response = Self.response(
-                    in: data, prompt: metadata.lastUserInput, initialStep: initialStep,
+                let extracted = Self.extractTurn(
+                    in: data, prompt: cleanedPrompt, initialStep: initialStep,
                     startedAt: startedAt)
+                if let matchedPrompt = extracted.prompt, result.prompt == nil {
+                    result.prompt = matchedPrompt
+                }
+                result.response = extracted.response
             }
             if result.response != nil { return result }
             if attempt < 3 {
@@ -57,14 +79,20 @@ actor AntigravityNotificationContextLoader {
         return result
     }
 
-    /// Perform a single non-blocking read of the conversation title and stripped user prompt for ask_question notifications.
-    func loadQuestionMetadata(_ metadata: AntigravityHookMetadata) -> (title: String?, prompt: String?) {
-        let prompt = metadata.lastUserInput.map { Self.userRequest($0) }
-        guard let (_, root) = validatedLocation(metadata) else {
-            return (nil, prompt)
+    /// Perform a single non-blocking read of the conversation title, prompt, and subagent flag for ask_question notifications.
+    func loadQuestionMetadata(_ metadata: AntigravityHookMetadata) -> AntigravityQuestionContext {
+        let prompt = Self.nonEmpty(metadata.lastUserInput.map(Self.userRequest))
+        guard let (file, root) = validatedLocation(metadata) else {
+            return AntigravityQuestionContext(
+                title: nil, prompt: prompt, isSubagent: metadata.isSubagent)
         }
-        let title = readTitle(root: root, conversationId: metadata.conversationId)
-        return (title, prompt)
+        let summary = readSummary(root: root, conversationId: metadata.conversationId)
+        var isSubagent = metadata.isSubagent || summary.isSubagent
+        if !isSubagent, let head = try? readHead(file) {
+            isSubagent = Self.isSubagentTranscript(in: head)
+        }
+        return AntigravityQuestionContext(
+            title: summary.title, prompt: prompt, isSubagent: isSubagent)
     }
 
     /// Unwrap `<USER_REQUEST>` tags and clean a user prompt string without reading disk.
@@ -94,6 +122,13 @@ actor AntigravityNotificationContextLoader {
         return nil
     }
 
+    /// Read at most 64 KiB from the beginning of the transcript to inspect step 0.
+    private func readHead(_ url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        return try handle.read(upToCount: 65_536) ?? Data()
+    }
+
     /// Read at most 2 MiB from the end, discarding an incomplete first row.
     private func readTail(_ url: URL) throws -> Data {
         let handle = try FileHandle(forReadingFrom: url)
@@ -109,22 +144,44 @@ actor AntigravityNotificationContextLoader {
         return data
     }
 
-    /// Select the final non-tool assistant step after this invocation's initial trajectory.
-    private static func response(in data: Data, prompt: String?, initialStep: Int?, startedAt: Date)
-        -> String?
-    {
+    /// Detect transcripts spawned by a parent agent whose step 0 is an inter-agent SYSTEM_MESSAGE.
+    private static func isSubagentTranscript(in head: Data) -> Bool {
+        guard let firstRow = head.split(separator: 10, maxSplits: 1).first,
+            let step = try? JSONDecoder().decode(Step.self, from: Data(firstRow)),
+            step.stepIndex == 0,
+            step.type == "SYSTEM_MESSAGE",
+            let content = step.content
+        else {
+            return false
+        }
+        return content.contains("[Message]") && content.contains("sender=")
+    }
+
+    /// Select the final non-tool assistant step and resolved user prompt for this invocation.
+    private static func extractTurn(
+        in data: Data, prompt: String?, initialStep: Int?, startedAt: Date
+    ) -> (prompt: String?, response: String?) {
         let decoder = JSONDecoder()
         var matchedUser = false
+        var resolvedPrompt = prompt
         var answer: String?
         let rows = data.split(separator: 10)
         for (index, row) in rows.enumerated() {
             guard let step = try? decoder.decode(Step.self, from: Data(row)) else {
                 // An unfinished final row may supersede an earlier visible response.
-                if index == rows.count - 1 { return nil }
+                if index == rows.count - 1 { return (resolvedPrompt, nil) }
                 continue
             }
             if step.type == "USER_INPUT" {
-                matchedUser = step.content.map { userRequest($0) } == prompt.map { userRequest($0) }
+                let candidate = nonEmpty(step.content.map(userRequest))
+                if let prompt {
+                    matchedUser = candidate == prompt
+                } else if let candidate {
+                    matchedUser = true
+                    resolvedPrompt = candidate
+                } else {
+                    matchedUser = false
+                }
                 answer = nil
             }
             guard step.type == "PLANNER_RESPONSE" else { continue }
@@ -141,13 +198,20 @@ actor AntigravityNotificationContextLoader {
                 isCurrent = false
             }
             if matchedUser, isCurrent, step.toolCalls?.isEmpty != false,
-                let content = step.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !content.isEmpty
+                let content = nonEmpty(step.content)
             {
                 answer = content
             }
         }
-        return answer
+        return (resolvedPrompt, answer)
+    }
+
+    /// Return a trimmed string when non-empty, treating whitespace-only text as nil.
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !trimmed.isEmpty
+        else { return nil }
+        return trimmed
     }
 
     /// Strip only the upstream request envelope before comparing the prompt to its hook value.
@@ -161,37 +225,61 @@ actor AntigravityNotificationContextLoader {
         return ConversationParser.cleanUserPrompt(value)
     }
 
-    /// Query one title using a bound parameter and a read-only SQLite connection.
-    private func readTitle(root: URL, conversationId: String) -> String? {
+    /// Query title and optional subagent lineage columns using a read-only SQLite connection.
+    private func readSummary(root: URL, conversationId: String) -> (
+        title: String?, isSubagent: Bool
+    ) {
         let file = root.appendingPathComponent("conversation_summaries.db")
         guard file.resolvingSymlinksInPath().path == file.path,
             FileManager.default.fileExists(atPath: file.path)
-        else { return nil }
-        let path = file.path
+        else { return (nil, false) }
         var database: OpaquePointer?
         guard
-            sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
+            sqlite3_open_v2(file.path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
                 == SQLITE_OK
         else {
             if let database { sqlite3_close(database) }
-            return nil
+            return (nil, false)
         }
         defer { sqlite3_close(database) }
+
+        let extendedSQL =
+            "SELECT title, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
         var statement: OpaquePointer?
-        guard
-            sqlite3_prepare_v2(
-                database,
-                "SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1", -1,
-                &statement, nil) == SQLITE_OK
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        return conversationId.withCString { id in
-            guard sqlite3_bind_text(statement, 1, id, -1, nil) == SQLITE_OK,
-                sqlite3_step(statement) == SQLITE_ROW, let value = sqlite3_column_text(statement, 0)
-            else { return nil }
-            let title = String(cString: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            return title.isEmpty ? nil : title
+        if sqlite3_prepare_v2(database, extendedSQL, -1, &statement, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(statement) }
+            return conversationId.withCString { id in
+                guard sqlite3_bind_text(statement, 1, id, -1, nil) == SQLITE_OK,
+                    sqlite3_step(statement) == SQLITE_ROW
+                else { return (nil, false) }
+                let title = Self.columnText(statement, index: 0)
+                let parentId = Self.columnText(statement, index: 1)
+                let depth = sqlite3_column_int(statement, 2)
+                let agentName = Self.columnText(statement, index: 3)
+                let isSubagent = parentId != nil || depth > 0 || agentName != nil
+                return (title, isSubagent)
+            }
         }
+        if let statement { sqlite3_finalize(statement) }
+
+        var fallbackStatement: OpaquePointer?
+        let fallbackSQL =
+            "SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+        guard sqlite3_prepare_v2(database, fallbackSQL, -1, &fallbackStatement, nil) == SQLITE_OK
+        else { return (nil, false) }
+        defer { sqlite3_finalize(fallbackStatement) }
+        return conversationId.withCString { id in
+            guard sqlite3_bind_text(fallbackStatement, 1, id, -1, nil) == SQLITE_OK,
+                sqlite3_step(fallbackStatement) == SQLITE_ROW
+            else { return (nil, false) }
+            return (Self.columnText(fallbackStatement, index: 0), false)
+        }
+    }
+
+    /// Read a nullable UTF-8 text column and normalize whitespace-only strings to nil.
+    private static func columnText(_ statement: OpaquePointer?, index: Int32) -> String? {
+        guard let raw = sqlite3_column_text(statement, index) else { return nil }
+        return nonEmpty(String(cString: raw))
     }
 
     /// Decode only visible message fields, ignoring thinking, arguments, and tool results.

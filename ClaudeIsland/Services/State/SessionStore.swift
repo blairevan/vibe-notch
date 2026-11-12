@@ -261,13 +261,11 @@ actor SessionStore {
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
         }
         if let tty = event.tty { session.tty = tty }
-        if let rawPrompt = metadata.lastUserInput {
-            let prompt = AntigravityNotificationContextLoader.cleanHookPrompt(rawPrompt)
-            if !prompt.isEmpty {
-                session.conversationInfo.lastUserMessage = prompt
-                if session.conversationInfo.firstUserMessage == nil {
-                    session.conversationInfo.firstUserMessage = prompt
-                }
+        if let rawPrompt = metadata.lastUserInput,
+           let prompt = Self.nonEmpty(AntigravityNotificationContextLoader.cleanHookPrompt(rawPrompt)) {
+            session.conversationInfo.lastUserMessage = prompt
+            if Self.nonEmpty(session.conversationInfo.firstUserMessage) == nil {
+                session.conversationInfo.firstUserMessage = prompt
             }
         }
         if state.isWaitingForUserInput && !state.isLoadingQuestionContext {
@@ -288,11 +286,21 @@ actor SessionStore {
             guard var current = sessions[event.sessionId],
                   current.antigravity?.pendingQuestionID == state.pendingQuestionID,
                   current.antigravity?.isWaitingForUserInput == true else { return }
-            if let title = questionMeta.title {
+            if questionMeta.isSubagent {
+                current.antigravity?.isSubagent = true
+                current.conversationInfo.isSubagent = true
+                current.antigravity?.isLoadingQuestionContext = false
+                sessions[event.sessionId] = current
+                return
+            }
+            if let title = Self.nonEmpty(questionMeta.title) {
                 current.conversationInfo.summary = title
             }
-            if let prompt = questionMeta.prompt, !prompt.isEmpty {
+            if let prompt = Self.nonEmpty(questionMeta.prompt) {
                 current.conversationInfo.lastUserMessage = prompt
+                if Self.nonEmpty(current.conversationInfo.firstUserMessage) == nil {
+                    current.conversationInfo.firstUserMessage = prompt
+                }
             }
             current.antigravity?.isLoadingQuestionContext = false
             current.phase = .waitingForInput
@@ -301,21 +309,45 @@ actor SessionStore {
         }
         guard needsContent else { return }
         var contextMetadata = metadata
-        contextMetadata.lastUserInput = metadata.lastUserInput ?? session.conversationInfo.lastUserMessage
+        contextMetadata.lastUserInput =
+            Self.nonEmpty(metadata.lastUserInput.map(AntigravityNotificationContextLoader.cleanHookPrompt))
+            ?? Self.nonEmpty(session.conversationInfo.lastUserMessage)
         let content = await notificationContextLoader.load(
             metadata: contextMetadata, initialStep: state.initialStep, startedAt: session.turnStartTime ?? session.createdAt
         )
         // Another turn or archival may have occurred while the file was being written.
         guard var current = sessions[event.sessionId], current.antigravity?.completionID == state.completionID,
             current.antigravity?.generation == state.generation, current.antigravity?.isActive == false else { return }
-        current.conversationInfo.summary = content.title
-        current.conversationInfo.lastUserMessage = content.prompt
+        if content.isSubagent {
+            current.antigravity?.isSubagent = true
+            current.conversationInfo.isSubagent = true
+            current.antigravity?.isLoadingNotification = false
+            current.phase = .waitingForInput
+            sessions[event.sessionId] = current
+            return
+        }
+        if let title = Self.nonEmpty(content.title) {
+            current.conversationInfo.summary = title
+        }
+        if let prompt = Self.nonEmpty(content.prompt) {
+            current.conversationInfo.lastUserMessage = prompt
+            if Self.nonEmpty(current.conversationInfo.firstUserMessage) == nil {
+                current.conversationInfo.firstUserMessage = prompt
+            }
+        }
         current.conversationInfo.lastMessage = content.response
         current.conversationInfo.lastMessageRole = content.response == nil ? nil : "assistant"
-        current.conversationInfo.lastErrorMessage = state.outcome == .failed ? (content.error?.isEmpty == false ? content.error : "执行异常中断（未提供错误详情）") : nil
+        current.conversationInfo.lastErrorMessage = state.outcome == .failed ? (Self.nonEmpty(content.error) ?? "执行异常中断（未提供错误详情）") : nil
         current.antigravity?.isLoadingNotification = false
         current.phase = .waitingForInput
         sessions[event.sessionId] = current
+    }
+
+    /// Returns a trimmed string when non-empty, treating whitespace-only text as nil.
+    private nonisolated static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     private func createSession(from event: HookEvent) -> SessionState {
